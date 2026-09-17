@@ -198,6 +198,20 @@ app.whenReady().then(async () => {
   sidecar.start()
   void mcp.reload()
   if (isDev && process.env.VA_SAY) setTimeout(() => void agent.send(process.env.VA_SAY!), 4000)
+  if (isDev && process.env.VA_MIC) {
+    // press the Voice button from outside to exercise the real getUserMedia -> worklet -> sidecar path
+    const press = (): void => {
+      void win?.webContents
+        .executeJavaScript(`(() => { const b = document.querySelector('button[aria-label="Start voice"]'); if (!b) return 'no-button'; b.click(); return 'clicked' })()`)
+        .then((r) => log('devtools', `voice button: ${String(r)}`))
+    }
+    const poll = setInterval(() => {
+      if (sidecar.ready && win) {
+        clearInterval(poll)
+        setTimeout(press, 1500)
+      }
+    }, 500)
+  }
   if (isDev && process.env.VA_WAV) {
     const stateListeners: Array<(s: string) => void> = []
     const origEmit = emitRef.current

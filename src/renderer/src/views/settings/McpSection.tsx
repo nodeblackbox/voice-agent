@@ -111,21 +111,74 @@ function ServerForm({ initial, onSave, onCancel, saving }: { initial: Form; onSa
   )
 }
 
-function McpToolTest({ server, tool }: { server: string; tool: string }) {
+type SchemaProp = { type?: string | string[]; description?: string; enum?: unknown[]; default?: unknown }
+
+export function schemaFields(schema: Record<string, unknown> | undefined): Array<{ name: string; prop: SchemaProp; required: boolean }> {
+  const props = (schema?.properties ?? {}) as Record<string, SchemaProp>
+  const required = new Set((schema?.required as string[] | undefined) ?? [])
+  return Object.entries(props).map(([name, prop]) => ({ name, prop, required: required.has(name) }))
+}
+
+export function buildToolInput(fields: ReturnType<typeof schemaFields>, values: Record<string, string>): { input: Record<string, unknown>; missing: string[] } {
+  const input: Record<string, unknown> = {}
+  const missing: string[] = []
+  for (const { name, prop, required } of fields) {
+    const raw = values[name] ?? ''
+    const type = Array.isArray(prop.type) ? prop.type[0] : prop.type
+    if (raw === '') {
+      if (required && prop.default === undefined) missing.push(name)
+      continue
+    }
+    if (type === 'number' || type === 'integer') {
+      const n = Number(raw)
+      if (Number.isNaN(n)) missing.push(name)
+      else input[name] = type === 'integer' ? Math.trunc(n) : n
+    } else if (type === 'boolean') input[name] = raw === 'true'
+    else if (type === 'object' || type === 'array') {
+      try {
+        input[name] = JSON.parse(raw)
+      } catch {
+        missing.push(name)
+      }
+    } else input[name] = raw
+  }
+  return { input, missing }
+}
+
+function McpToolTest({ server, tool, schema }: { server: string; tool: string; schema?: Record<string, unknown> }) {
   const [open, setOpen] = useState(false)
-  const [input, setInput] = useState('{}')
+  const [values, setValues] = useState<Record<string, string>>({})
+  const [raw, setRaw] = useState(false)
+  const [json, setJson] = useState('{}')
   const [result, setResult] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [ms, setMs] = useState<number | null>(null)
+  const fields = schemaFields(schema)
 
   const run = async () => {
-    setBusy(true)
     setResult(null)
+    let input: unknown
+    if (raw || fields.length === 0) {
+      try {
+        input = JSON.parse(json || '{}')
+      } catch {
+        setResult('error: the JSON is not valid')
+        return
+      }
+    } else {
+      const built = buildToolInput(fields, values)
+      if (built.missing.length) {
+        setResult(`error: fill in ${built.missing.join(', ')}`)
+        return
+      }
+      input = built.input
+    }
+    setBusy(true)
     const t0 = performance.now()
     try {
-      const parsed: unknown = JSON.parse(input || '{}')
-      const r = await window.api.services.mcpTestTool(server, tool, parsed)
-      setResult(typeof r === 'string' ? r : JSON.stringify(r, null, 2))
+      const r = await window.api.services.mcpTestTool(server, tool, input)
+      const errored = r && typeof r === 'object' && 'error' in (r as Record<string, unknown>)
+      setResult(errored ? `error: ${String((r as { error: unknown }).error)}` : typeof r === 'string' ? r : JSON.stringify(r, null, 2))
     } catch (err) {
       setResult(`error: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
@@ -134,14 +187,52 @@ function McpToolTest({ server, tool }: { server: string; tool: string }) {
     }
   }
 
+  const fieldInput = (name: string, prop: SchemaProp) => {
+    const type = Array.isArray(prop.type) ? prop.type[0] : prop.type
+    const value = values[name] ?? (prop.default !== undefined ? String(prop.default) : '')
+    if (prop.enum) {
+      return <Select value={value} onChange={(v) => setValues({ ...values, [name]: v })} options={[{ id: '', label: '—' }, ...prop.enum.map((e) => ({ id: String(e), label: String(e) }))]} />
+    }
+    if (type === 'boolean') {
+      return <Select value={value} onChange={(v) => setValues({ ...values, [name]: v })} options={[{ id: '', label: '—' }, { id: 'true', label: 'true' }, { id: 'false', label: 'false' }]} />
+    }
+    return (
+      <TextInput
+        value={value}
+        onChange={(v) => setValues({ ...values, [name]: v })}
+        mono={type !== 'string'}
+        placeholder={type === 'object' || type === 'array' ? 'JSON' : type ?? 'text'}
+        onKeyDown={(e) => e.key === 'Enter' && void run()}
+      />
+    )
+  }
+
   return (
     <span className="inline-flex flex-col gap-1 items-end">
       <Btn small icon={Play} onClick={() => setOpen(!open)}>
         Test
       </Btn>
       {open && (
-        <span className="flex flex-col gap-1 mt-1 va-fade" style={{ width: 380 }}>
-          <TextInput value={input} onChange={setInput} mono placeholder='{"expression": "17*23"}' onKeyDown={(e) => e.key === 'Enter' && void run()} />
+        <span className="flex flex-col gap-1.5 mt-1 va-fade" style={{ width: 400 }}>
+          {!raw && fields.length > 0 ? (
+            fields.map(({ name, prop, required }) => (
+              <span key={name} className="flex flex-col gap-0.5">
+                <span className="text-xs" style={{ color: T.text3 }}>
+                  <span style={{ fontFamily: T.mono, color: T.text2 }}>{name}</span>
+                  {required && <span style={{ color: T.amber }}> *</span>}
+                  {prop.description && <span> — {prop.description}</span>}
+                </span>
+                {fieldInput(name, prop)}
+              </span>
+            ))
+          ) : (
+            <TextInput value={json} onChange={setJson} mono placeholder='{"expression": "17*23"}' onKeyDown={(e) => e.key === 'Enter' && void run()} />
+          )}
+          {fields.length > 0 && (
+            <button onClick={() => setRaw(!raw)} className="text-xs self-start" style={{ background: 'none', border: 'none', color: T.text3, cursor: 'pointer', padding: 0 }}>
+              {raw ? 'Use form' : 'Edit as JSON'}
+            </button>
+          )}
           <span className="flex justify-end items-center gap-2">
             {ms !== null && (
               <span className="text-xs" style={{ color: T.text3, fontFamily: T.mono }}>
@@ -225,7 +316,7 @@ function ServerCard({
               <span className="flex-1" style={{ color: T.text3, lineHeight: 1.4 }}>
                 {t.description}
               </span>
-              <McpToolTest server={config.name} tool={t.name} />
+              <McpToolTest server={config.name} tool={t.name} schema={t.inputSchema} />
             </div>
           ))}
         </div>

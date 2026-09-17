@@ -179,7 +179,7 @@ export class McpService implements McpBridge {
       transport: s.config.transport,
       state: s.state,
       error: s.error,
-      tools: s.tools.map((t) => ({ server: t.server, name: t.name, description: t.description })),
+      tools: s.tools.map((t) => ({ server: t.server, name: t.name, description: t.description, inputSchema: t.inputSchema })),
       stderrTail: s.stderr.slice(-8),
       connectedAt: s.connectedAt,
       calls: s.calls

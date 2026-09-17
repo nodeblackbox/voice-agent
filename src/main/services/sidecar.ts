@@ -150,11 +150,17 @@ export class SidecarService {
     this.send({ type: 'config', endpoint: this.opts.endpoint(), stt: this.opts.stt() })
   }
 
+  private frames = 0
+
   sendFrame(pcm: ArrayBuffer): void {
-    if (this.listening && this.ws?.readyState === WebSocket.OPEN) this.ws.send(Buffer.from(pcm), { binary: true })
+    if (!this.listening || this.ws?.readyState !== WebSocket.OPEN) return
+    if (this.frames++ === 0) log('sidecar', `mic frames flowing (${pcm.byteLength} bytes/frame)`)
+    this.ws.send(Buffer.from(pcm), { binary: true })
   }
 
   setListening(on: boolean): void {
+    if (on) this.frames = 0
+    else if (this.listening) log('sidecar', `listening off after ${this.frames} frames`)
     this.listening = on
     this.send({ type: 'mute', on: !on })
     if (on && !this.proc) this.start()

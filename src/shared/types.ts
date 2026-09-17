@@ -238,6 +238,7 @@ export interface McpToolInfo {
   server: string
   name: string
   description?: string
+  inputSchema?: Record<string, unknown>
 }
 
 export interface McpServerStatus {

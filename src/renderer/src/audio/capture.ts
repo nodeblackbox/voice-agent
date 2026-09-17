@@ -1,16 +1,40 @@
-import { CAPTURE_PROCESSOR_NAME, CAPTURE_PROCESSOR_SOURCE } from './capture-processor'
+import { CAPTURE_PROCESSOR_NAME, captureProcessorUrl } from './capture-processor'
 
 let ctx: AudioContext | null = null
 let stream: MediaStream | null = null
 let node: AudioWorkletNode | null = null
-let moduleUrl: string | null = null
 let starting: Promise<void> | null = null
 
-async function loadModule(c: AudioContext): Promise<void> {
-  if (!moduleUrl) {
-    moduleUrl = URL.createObjectURL(new Blob([CAPTURE_PROCESSOR_SOURCE], { type: 'application/javascript' }))
+export class CaptureError extends Error {
+  constructor(
+    readonly stage: 'permission' | 'device' | 'worklet' | 'context',
+    message: string
+  ) {
+    super(message)
   }
-  await c.audioWorklet.addModule(moduleUrl)
+}
+
+async function openMic(deviceId?: string): Promise<MediaStream> {
+  const constraints = (exact: boolean): MediaStreamConstraints => ({
+    audio: {
+      deviceId: deviceId && exact ? { exact: deviceId } : undefined,
+      channelCount: 1,
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true
+    }
+  })
+  try {
+    return await navigator.mediaDevices.getUserMedia(constraints(true))
+  } catch (e) {
+    const err = e as DOMException
+    if (err.name === 'NotAllowedError') throw new CaptureError('permission', 'Microphone access was denied.')
+    if (deviceId && (err.name === 'OverconstrainedError' || err.name === 'NotFoundError')) {
+      // the saved device is gone (unplugged / re-enumerated); fall back to the default mic
+      return navigator.mediaDevices.getUserMedia(constraints(false))
+    }
+    throw new CaptureError('device', err.message || err.name)
+  }
 }
 
 export const capture = {
@@ -22,28 +46,22 @@ export const capture = {
     if (starting) return starting
     if (stream) return
     starting = (async () => {
-      const media = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          deviceId: deviceId ? { exact: deviceId } : undefined,
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        }
-      })
+      const media = await openMic(deviceId)
       let c: AudioContext
       try {
         c = new AudioContext({ sampleRate: 16000, latencyHint: 'interactive' })
       } catch {
         c = new AudioContext({ latencyHint: 'interactive' })
       }
-      await loadModule(c)
+      try {
+        await c.audioWorklet.addModule(captureProcessorUrl())
+      } catch (e) {
+        media.getTracks().forEach((t) => t.stop())
+        await c.close().catch(() => undefined)
+        throw new CaptureError('worklet', `Could not load the audio worklet (${(e as Error).message}).`)
+      }
       const source = c.createMediaStreamSource(media)
-      const worklet = new AudioWorkletNode(c, CAPTURE_PROCESSOR_NAME, {
-        numberOfInputs: 1,
-        numberOfOutputs: 0,
-        channelCount: 1
-      })
+      const worklet = new AudioWorkletNode(c, CAPTURE_PROCESSOR_NAME, { numberOfInputs: 1, numberOfOutputs: 0, channelCount: 1 })
       worklet.port.onmessage = (e: MessageEvent<ArrayBuffer>) => window.api.voice.sendFrame(e.data)
       source.connect(worklet)
       if (c.state === 'suspended') await c.resume()
@@ -67,5 +85,13 @@ export const capture = {
     const c = ctx
     ctx = null
     if (c) await c.close().catch(() => undefined)
+  },
+
+  get sampleRate(): number | null {
+    return ctx?.sampleRate ?? null
+  },
+
+  get deviceLabel(): string | null {
+    return stream?.getAudioTracks()[0]?.label ?? null
   }
 }
