@@ -1,0 +1,165 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: #0b0d10;
+  color: #edeef0;
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+button {
+  font: inherit;
+}
+
+textarea:focus,
+input:focus,
+select:focus {
+  outline: none;
+}
+
+@keyframes vaWave {
+  0%,
+  100% {
+    transform: scaleY(0.35);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+.va-bar {
+  width: 3px;
+  border-radius: 2px;
+  transform-origin: center;
+  animation: vaWave 0.9s ease-in-out infinite;
+  display: inline-block;
+}
+
+@keyframes vaRing {
+  0% {
+    box-shadow: 0 0 0 0 rgba(79, 209, 255, 0.35);
+  }
+  100% {
+    box-shadow: 0 0 0 12px rgba(79, 209, 255, 0);
+  }
+}
+
+.va-ring {
+  animation: vaRing 1.4s ease-out infinite;
+}
+
+@keyframes vaPulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.va-pulse {
+  animation: vaPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes vaSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.va-spin {
+  animation: vaSpin 1s linear infinite;
+}
+
+@keyframes vaFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.va-fade {
+  animation: vaFadeIn 0.18s ease-out;
+}
+
+@keyframes vaSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.va-slide {
+  animation: vaSlideIn 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes vaShimmer {
+  0% {
+    background-position: -120px 0;
+  }
+  100% {
+    background-position: 120px 0;
+  }
+}
+
+.va-shimmer {
+  background: linear-gradient(90deg, currentColor 0%, #ffffff 50%, currentColor 100%);
+  background-size: 240px 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: vaShimmer 1.6s linear infinite;
+}
+
+@keyframes vaGlow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(185, 139, 255, 0.18);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(185, 139, 255, 0);
+  }
+}
+
+.va-glow {
+  animation: vaGlow 1.6s ease-out infinite;
+}
+
+.va-spin-slow {
+  animation: vaSpin 2.4s linear infinite;
+}
+
+.va-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.va-scroll::-webkit-scrollbar-thumb {
+  background: #23272d;
+  border-radius: 8px;
+}
+
+.va-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+input[type='range'] {
+  accent-color: #4fd1ff;
+}

@@ -1,0 +1,21 @@
+node_modules/
+out/
+dist/
+release/
+*.log
+.env
+.env.*
+
+# Python sidecar
+sidecar/.venv/
+sidecar/**/__pycache__/
+models/*.onnx
+models/hf-cache/
+
+# SearXNG (fetched by search/install_searxng.ps1)
+search/searxng-src/
+search/.venv-searxng/
+search/settings.local.yml
+
+# local app data written during dev
+.data/

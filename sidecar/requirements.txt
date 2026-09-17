@@ -1,0 +1,18 @@
+# Pins match the proven stack in D:\Downloads\voiceAgent (RTX 4090, driver 551.23, CUDA 12.4).
+--extra-index-url https://download.pytorch.org/whl/cu124
+numpy==2.4.6
+onnx-asr==0.12.0
+onnxruntime-gpu==1.26.0
+nvidia-cublas-cu12==12.4.5.8
+nvidia-cuda-nvrtc-cu12==12.4.127
+nvidia-cuda-runtime-cu12==12.4.127
+nvidia-cudnn-cu12==9.1.1.17
+nvidia-cufft-cu12==11.2.6.59
+nvidia-curand-cu12==10.3.9.90
+nvidia-nvjitlink-cu12==12.9.86
+silero-vad==6.2.1
+torch==2.6.0+cu124
+torchaudio==2.6.0+cu124
+huggingface_hub==1.29.0
+websockets==16.1.1
+soundfile==0.14.0

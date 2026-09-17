@@ -1,0 +1,4 @@
+# Enough to run the unit tests without any model: no torch, no onnxruntime, no onnx-asr.
+numpy>=2.0
+websockets>=14
+pytest>=8

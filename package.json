@@ -1,0 +1,68 @@
+{
+  "name": "voice-ai-chatbot",
+  "productName": "Voice Agent",
+  "version": "0.1.0",
+  "description": "Standalone desktop voice agent: Parakeet ears, Edge TTS voice, any LLM brain.",
+  "main": "./out/main/index.js",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "pnpm run \"/^typecheck:/\"",
+    "package": "electron-vite build && electron-builder --win --dir",
+    "sidecar:install": "powershell -ExecutionPolicy Bypass -File sidecar/install.ps1",
+    "searxng:install": "python search/install_searxng.py",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:py": "python -m pytest sidecar/tests -q",
+    "check": "pnpm run \"/^(typecheck:|test$)/\"",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
+    "typecheck:web": "tsc --noEmit -p tsconfig.web.json"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.56",
+    "@ai-sdk/google": "^4.0.74",
+    "@ai-sdk/groq": "^4.0.44",
+    "@ai-sdk/xai": "^5.0.2",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@mozilla/readability": "^0.6.0",
+    "ai": "^7.0.104",
+    "jsdom": "^30.0.1",
+    "lucide-react": "^1.46.0",
+    "msedge-tts": "^2.0.7",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "ws": "^8.21.3",
+    "zod": "^4.6.5",
+    "zustand": "^5.0.15"
+  },
+  "devDependencies": {
+    "@ai-sdk/provider": "^4.0.17",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/jsdom": "^21.1.7",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@types/ws": "^8.18.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "@vitest/coverage-v8": "^5.0.1",
+    "electron": "^44.4.1",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.0",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.1"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "esbuild",
+      "msedge-tts",
+      "electron-winstaller"
+    ]
+  }
+}

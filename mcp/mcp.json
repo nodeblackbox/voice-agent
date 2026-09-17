@@ -1,0 +1,26 @@
+{
+  "$comment": "MCP servers the voice agent connects to. ${ROOT} = this repo, ${PROJECT_PATH} = the active project's folder, ${NODE} = the app's own Node runtime. Copy to the app's user-data folder as mcp.json to override without touching the repo.",
+  "servers": [
+    {
+      "name": "demo",
+      "enabled": true,
+      "transport": "stdio",
+      "command": "${NODE}",
+      "args": ["${ROOT}/mcp/servers/demo/server.mjs"]
+    },
+    {
+      "name": "filesystem",
+      "enabled": false,
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "${PROJECT_PATH}"]
+    },
+    {
+      "name": "fetch",
+      "enabled": false,
+      "transport": "stdio",
+      "command": "uvx",
+      "args": ["mcp-server-fetch"]
+    }
+  ]
+}
