@@ -312,7 +312,8 @@ def test_stats_are_emitted_after_each_final(make_pipeline, events):
     stats = [e for e in events if e["type"] == "stats"]
     assert len(stats) == 1
     assert stats[0] == {"type": "stats", "turns": 1, "turnChecks": 1, "turnCostP50Ms": stats[0]["turnCostP50Ms"],
-                        "heldOnFiller": 0, "backchannels": 0, "cuts": 0, "cutsEmptyFinal": 0}
+                        "heldOnFiller": 0, "backchannels": 0, "cuts": 0, "cutsEmptyFinal": 0,
+                        "asrFailures": 0, "asrReloads": 0, "gpuMiB": None}
     assert stats[0]["turnCostP50Ms"] is not None
 
 
@@ -324,6 +325,62 @@ def test_empty_final_after_a_cut_counts_as_a_self_cut_suspect(make_pipeline, eve
     final = next(e for e in events if e["type"] == "final")
     assert final["afterCut"] is True and final["text"] == ""
     assert events[-1]["type"] == "stats" and events[-1]["cutsEmptyFinal"] == 1 and events[-1]["cuts"] == 1
+
+
+class FlakyAsr(FakeAsr):
+    """Fails every decode until `reload()` is called `heal_after` times."""
+
+    def __init__(self, heal_after: int = 1) -> None:
+        super().__init__("healed")
+        self.heal_after = heal_after
+        self.reloads = 0
+
+    def recognize(self, audio: np.ndarray) -> str:
+        if self.reloads < self.heal_after:
+            raise RuntimeError("CUBLAS failure 3: the resource allocation failed")
+        return super().recognize(audio)
+
+    def reload(self) -> None:
+        self.reloads += 1
+
+
+def drive_finals(p, n: int) -> None:
+    for _ in range(n):
+        speak(p, 20 + 12)  # speech, then silence -> speech_end -> queued final
+        p.decode_next()
+
+
+def test_repeated_decode_failures_reload_the_model_once_and_recover(make_pipeline, events):
+    asr = FlakyAsr(heal_after=1)
+    p = make_pipeline(vad=FakeVad(default=0.0), asr=asr, turn=FakeTurn(0.95))
+    p.vad = FakeVad([0.9] * 20 * 4 + [0.0] * 200, default=0.0)  # four utterances worth of speech, then quiet
+    fatal: list[int] = []
+    p.on_fatal = fatal.append
+    # partial decodes count too: two partials plus the final of the first utterance fail -> reload;
+    # every later decode succeeds
+    for i in range(4):
+        p.vad.probs = [0.9] * 20 + [0.0] * 12
+        drive_finals(p, 1)
+    finals = [e for e in events if e["type"] == "final"]
+    assert [f["text"] for f in finals] == ["", "healed", "healed", "healed"]
+    assert asr.reloads == 1 and fatal == [] and p.fatal_code is None
+    stats = [e for e in events if e["type"] == "stats"][-1]
+    assert stats["asrFailures"] == 3 and stats["asrReloads"] == 1
+    assert any(e["type"] == "error" and "reloaded" in e["message"] for e in events)
+
+
+def test_decode_failures_after_a_reload_are_fatal_with_exit_code_4(make_pipeline, events):
+    asr = FlakyAsr(heal_after=99)
+    p = make_pipeline(vad=FakeVad(default=0.0), asr=asr, turn=FakeTurn(0.95))
+    fatal: list[int] = []
+    p.on_fatal = fatal.append
+    for i in range(6):
+        p.vad.probs = [0.9] * 20 + [0.0] * 12
+        drive_finals(p, 1)
+    assert asr.reloads == 1
+    assert fatal == [4] and p.fatal_code == 4
+    err = next(e for e in events if e["type"] == "error" and e.get("fatal"))
+    assert err["code"] == "asr_broken"
 
 
 def test_a_persistent_frame_fault_is_rate_limited(make_pipeline, events):

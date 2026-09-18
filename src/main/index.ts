@@ -7,7 +7,7 @@ import { earConfig } from '@shared/tuning'
 import { Agent } from '@core/agent'
 import { MemoryStore } from '@core/memory/store'
 import { findModel } from '@core/providers/models'
-import { initLog, log, logAt, trace, tracePath, type LogLevel } from './services/log'
+import { initLog, log, logAt, logError, trace, tracePath, type LogLevel } from './services/log'
 import { SettingsService } from './services/settings'
 import { SidecarService } from './services/sidecar'
 import { SearxngService } from './services/searxng'
@@ -83,6 +83,21 @@ app.whenReady().then(async () => {
   })
   log('app', `starting (dev=${isDev}) root=${projectRoot} userData=${userData}`)
 
+  // Electron would show a modal "A JavaScript error occurred in the main process" and leave nothing
+  // in our logs; record it with its stack, tell the user once, and keep running.
+  const crashed = new Set<string>()
+  const onCrash = (kind: string, err: unknown): void => {
+    const e = err as { message?: string; stack?: string } | undefined
+    logError('main', kind, err)
+    trace({ ev: 'app.crash', kind, message: e?.message ?? String(err), stack: e?.stack?.split('\n').slice(0, 12).join('\n') })
+    const key = `${kind}:${e?.message ?? String(err)}`
+    if (crashed.has(key)) return
+    crashed.add(key)
+    emit({ type: 'toast', toast: { id: crypto.randomUUID(), kind: 'error', text: `Internal error (${kind}): ${e?.message ?? String(err)}. Logged to errors.log.` } })
+  }
+  process.on('uncaughtException', (err) => onCrash('uncaughtException', err))
+  process.on('unhandledRejection', (reason) => onCrash('unhandledRejection', reason))
+
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(['media', 'speaker-selection', 'clipboard-read', 'clipboard-sanitized-write'].includes(permission))
   })
@@ -143,6 +158,7 @@ app.whenReady().then(async () => {
           break
         case 'error':
           if (!evt.fatal) logAt('warn', 'ear', `error: ${evt.message}`)
+          else if (evt.code === 'asr_broken') emit({ type: 'toast', toast: { id: crypto.randomUUID(), kind: 'warn', text: 'The ears hit a GPU error and are restarting. Check what else is using the graphics card if it keeps happening.' } })
           break
         default:
           break

@@ -169,10 +169,57 @@ export function trace(event: TraceEvent): void {
   }
 }
 
+/**
+ * Folds a Python traceback (a dozen stderr lines) into one log entry so the flood guard sees one
+ * event, not twelve unrelated templates. Feed lines in order; `push` returns entries ready to log.
+ */
+export class StderrFolder {
+  private buf: string[] = []
+  private readonly maxLines: number
+
+  constructor(maxLines = 40) {
+    this.maxLines = maxLines
+  }
+
+  push(line: string): string[] {
+    const out: string[] = []
+    const startsTrace = /^Traceback \(most recent call last\):/.test(line)
+    if (this.buf.length) {
+      const continuation = /^\s/.test(line) || /^File "/.test(line) || /^\^+$/.test(line.trim())
+      const isException = /^[A-Za-z_][\w.]*(Error|Exception|Warning|Fail|Interrupt)\b.*$/.test(line) || /^[A-Za-z_][\w.]*: /.test(line)
+      if (continuation) {
+        if (this.buf.length < this.maxLines) this.buf.push(line)
+        return out
+      }
+      if (isException && !startsTrace) {
+        this.buf.push(line)
+        out.push(this.buf.join('\n'))
+        this.buf = []
+        return out
+      }
+      out.push(this.buf.join('\n'))
+      this.buf = []
+    }
+    if (startsTrace) {
+      this.buf.push(line)
+      return out
+    }
+    out.push(line)
+    return out
+  }
+
+  flush(): string[] {
+    if (!this.buf.length) return []
+    const entry = this.buf.join('\n')
+    this.buf = []
+    return [entry]
+  }
+}
+
 /** Parse one line of the Python sidecar's stderr into a level; unknown formats are info. */
 export function sidecarLevel(line: string): { level: LogLevel; msg: string } {
-  const m = /^\d\d:\d\d:\d\d (DEBUG|INFO|WARNING|ERROR|CRITICAL) (\S+): (.*)$/.exec(line)
-  if (!m) return { level: /error|traceback|exception/i.test(line) ? 'warn' : 'info', msg: line }
+  const m = /^\d\d:\d\d:\d\d (DEBUG|INFO|WARNING|ERROR|CRITICAL) (\S+): ([\s\S]*)$/.exec(line)
+  if (!m) return { level: /error|traceback|exception/i.test(line.split('\n')[0] ?? '') ? 'warn' : 'info', msg: line }
   const lvl = m[1]!
   const level: LogLevel = lvl === 'DEBUG' ? 'debug' : lvl === 'INFO' ? 'info' : lvl === 'WARNING' ? 'warn' : 'error'
   return { level, msg: `${m[2]}: ${m[3]}` }

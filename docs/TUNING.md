@@ -130,6 +130,7 @@ ducked and bargeInReleaseChunks quiet frames → release: it was a backchannel, 
 |---|---|---|
 | `idleShutdownMs` | 300000 | Unload the ear models after the mic has been off this long; 0 never. A restart is a full cold load (Silero + Smart Turn + Parakeet), so audio spoken during it is buffered and replayed once ready. |
 | `levelEveryFrames` | 3 | Frames between VAD level events for the UI meter (~10 Hz). Never written to logs. |
+| `asrFailureLimit` | 3 | Consecutive failed decodes before the ears reload the speech model once; failing again restarts the ears (exit code 4) with a toast. The stress test lost the last 5 minutes to a CUDA allocation failure that nothing recovered from. |
 | `logTranscripts` | true | Include spoken text in the session trace on disk. |
 | `logLevel` | info | Minimum level for `app.log`; `errors.log` always gets warn+. |
 

@@ -16,6 +16,7 @@ log = logging.getLogger("ear")
 
 EXIT_FATAL = 1
 EXIT_NO_CUDA = 3
+EXIT_ASR_BROKEN = 4
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -36,6 +37,12 @@ async def run(args: argparse.Namespace) -> int:
         loop.call_soon_threadsafe(out_q.put_nowait, msg)
 
     pipeline = Pipeline(emit, args.models_dir, EndpointConfig(), SttConfig(args.stt_model, args.stt_device))
+    fatal: asyncio.Future[int] = loop.create_future()
+
+    def on_fatal(code: int) -> None:
+        loop.call_soon_threadsafe(lambda: fatal.done() or fatal.set_result(code))
+
+    pipeline.on_fatal = on_fatal
     server = EarServer(pipeline, out_q)
     port = await server.start(args.port)
     print(f"EAR_PORT {port}", flush=True)
@@ -54,7 +61,14 @@ async def run(args: argparse.Namespace) -> int:
         await asyncio.sleep(0.2)
         return EXIT_FATAL
 
-    await server.serve_forever()
+    serving = asyncio.ensure_future(server.serve_forever())
+    done, _ = await asyncio.wait({serving, fatal}, return_when=asyncio.FIRST_COMPLETED)
+    if fatal in done:
+        code = fatal.result()
+        log.error("fatal: exiting with code %d so the app restarts the ears", code)
+        await asyncio.sleep(0.2)  # let the fatal error message drain to the client
+        serving.cancel()
+        return code
     return 0
 
 

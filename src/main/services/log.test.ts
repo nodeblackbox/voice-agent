@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { initLog, log, logAt, logError, sidecarLevel, trace, tracePath } from './log'
+import { StderrFolder, initLog, log, logAt, logError, sidecarLevel, trace, tracePath } from './log'
 
 let dir: string
 let level: 'debug' | 'info' | 'warn' | 'error' = 'info'
@@ -88,6 +88,30 @@ describe('log', () => {
     const files = ['old-1', 'old-2', 'new-3'].map((s) => existsSync(join(dir, 'logs', 'sessions', `${s}.jsonl`)))
     expect(files.filter(Boolean).length).toBeLessThanOrEqual(2)
     expect(files[2]).toBe(true)
+  })
+
+  it('folds a python traceback into one entry and leaves other lines alone', () => {
+    const f = new StderrFolder()
+    const lines = [
+      '12:00:00 INFO ear.pipeline: final asr_ms=5',
+      'Traceback (most recent call last):',
+      '  File "D:\\x\\pipeline.py", line 341, in _partial_job',
+      '    text = self.asr.recognize(audio[-SR * 15:])',
+      '           ^^^^^^^^^^^^^^^^^^^^',
+      'onnxruntime.capi.onnxruntime_pybind11_state.Fail: [ONNXRuntimeError] : 1 : FAIL : CUBLAS failure 3',
+      '12:00:01 WARNING ear.pipeline: partial decode failed: repeated 10 more times'
+    ]
+    const out = lines.flatMap((l) => f.push(l))
+    expect(out).toHaveLength(3)
+    expect(out[1]!.split('\n')).toHaveLength(5)
+    expect(out[1]).toMatch(/^Traceback/)
+    expect(out[1]).toMatch(/CUBLAS failure 3$/)
+    expect(sidecarLevel(out[1]!).level).toBe('warn')
+    expect(out[2]).toContain('WARNING')
+    expect(f.flush()).toEqual([])
+    f.push('Traceback (most recent call last):')
+    f.push('  File "x", line 1')
+    expect(f.flush()).toEqual(['Traceback (most recent call last):\n  File "x", line 1'])
   })
 
   it('parses sidecar stderr levels', () => {

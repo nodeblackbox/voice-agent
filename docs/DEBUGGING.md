@@ -30,7 +30,8 @@ Every line has `t` (ISO time), `sid` (session), usually `turn`, and `ev`. Prefix
 | `turn.*` | agent core | `start{via, text, asrMs, queuedMs, endReason, silenceMs, turnP, model, style, mode, tools, memoryHints…}`, `first_token{ttftMs}`, `first_sentence{ttfsMs}`, `first_audio{ttfaMs, speechEndToAudioMs, ttsFirstMs, ttsFirstByteMs}`, `tool_start{id, name, summary}`, `tool_end{id, name, ok, ms, detail}`, `filler{kind: lead-in|continuation, text}`, `attempt{reason, model}`, `attempt_failed{error, transient}`, `stall{reason}`, `step_limit`, `notice{text}`, `self_cut_suspect{overlap}`, `dropped{reason}`, `spoken_split{seq, offsetS, durationS}`, `cancel{reason, spokenText, unspokenText, metrics}`, `drain_timeout{waitMs}` (the renderer never reported the audio finished, e.g. audio device error), `end{metrics, fillers, ttsDroppedFrames}`, `error{message}`, `mergeable{reason}` (this transcript looked unfinished; a resume inside the window merges), `continuation{gapMs}` (the user resumed: reply cancelled silently), `merged{parts, text}` (the joined transcript starts a turn), `segment{index}` |
 | `tts.sentence` | speaker | `{seq, kind, chars, ms, firstByteMs, attempts, outcome: ok|skip|fallback, engine}` |
 | `playback.*` | renderer via agent | `started{seq, kind}`, `finished{seq}`, `drained{chunks}` |
-| `sidecar.*` | process supervisor | `spawn`, `connected{port, retries}`, `buffer_flushed{frames, ms}`, `ws_close{code, processAlive}`, `heartbeat_lost`, `restart{delayMs}`, `idle_shutdown`, `exit{code}` |
+| `sidecar.*` | process supervisor | `spawn`, `connected{port, retries}`, `buffer_flushed{frames, ms}`, `ws_close{code, processAlive}`, `heartbeat_lost`, `restart{delayMs, reason?}` (`asr_broken` = the ears reloaded the speech model, kept failing, and exited with code 4), `idle_shutdown`, `exit{code}`, `handler_error{event}` (an exception inside the app's handler for a sidecar event, logged with its stack in errors.log) |
+| `app.crash` | main process | `{kind: uncaughtException|unhandledRejection, message, stack}` — the app keeps running; the user gets one toast |
 | `session.*` | | `start`, `select`, `summary{turns, latency{p50,p95}…}` |
 | `settings.changed` | | `{changed: {'endpoint.prerollMs': 1000, …}}` |
 | `ui.toast` | | what the user was shown |
@@ -95,6 +96,13 @@ text got a reply.
   `bargeInThreshold`; if it keeps happening with speakers on, the echo gate (Phase 4) is the fix.
 - `cut` with a real transcript → a genuine interruption; check `turn.cancel` shows `spokenText` /
   `unspokenText` split sensibly, and that the next `turn.start` follows.
+
+**"It stopped understanding me / every transcript came back empty."** `ear.error` lines with
+`decode failed: … CUBLAS failure` or `Failed to allocate memory` mean the GPU ran out of memory
+(another app took the VRAM; `ear.stats.gpuMiB` shows the trend). After `asrFailureLimit` failures
+the ears reload the model (`error: speech recognition was reloaded…`), and if that does not help they
+exit with code 4 (`sidecar.exit{code:4}` → `sidecar.restart{reason:'asr_broken'}`) and the app shows a
+toast. If the restart loops, free the GPU or switch STT to CPU in Settings.
 
 **"It answered in the transcript but I heard nothing."** `tts.sentence` lines exist but no
 `playback.started` follows, and `turn.drain_timeout` closes the turn → the renderer could not play:

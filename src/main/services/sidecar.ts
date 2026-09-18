@@ -5,7 +5,7 @@ import WebSocket from 'ws'
 import type { ServiceStatus, SttSettings } from '@shared/types'
 import { DEFAULT_TUNING } from '@shared/tuning'
 import type { Trace } from '@core/trace'
-import { log, logAt, sidecarLevel } from './log'
+import { StderrFolder, log, logAt, logError, sidecarLevel } from './log'
 
 export interface TurnCheck {
   silenceMs: number
@@ -26,8 +26,11 @@ export type SidecarEvent =
   | { type: 'final'; text: string; durationMs: number; asrMs: number; asrRtf?: number | null; turnP: number | null; reason: string; queuedMs?: number; afterCut?: boolean; segments?: number }
   | { type: 'bargein'; stage: 'duck' | 'cut' | 'release'; prerollMs?: number }
   | { type: 'stats'; turns?: number; turnChecks?: number; turnCostP50Ms?: number | null; heldOnFiller?: number; backchannels?: number; cuts?: number; cutsEmptyFinal?: number }
-  | { type: 'error'; message: string; fatal: boolean }
+  | { type: 'error'; message: string; fatal: boolean; code?: string }
   | { type: 'pong' }
+
+/** The sidecar's ASR kept failing after a reload (GPU memory pressure); restart promptly, once. */
+const EXIT_ASR_BROKEN = 4
 
 export interface SidecarOptions {
   projectRoot: string
@@ -73,6 +76,7 @@ export class SidecarService {
   private pending: Buffer[] = []
   private pendingDropped = 0
   private frames = 0
+  private asrRestarts = 0
   status: ServiceStatus = { name: 'sidecar', state: 'off' }
 
   constructor(private readonly opts: SidecarOptions) {}
@@ -124,6 +128,14 @@ export class SidecarService {
         this.connect(this.port)
       }
     })
+    const folder = new StderrFolder()
+    const emitEntry = (entry: string): void => {
+      const { level, msg } = sidecarLevel(entry)
+      logAt(level, 'ear', msg)
+    }
+    proc.stderr?.on('end', () => {
+      for (const entry of folder.flush()) emitEntry(entry)
+    })
     proc.stderr?.on('data', (d: Buffer) => {
       // onnxruntime writes its warnings as UTF-16 on Windows; everything else is UTF-8
       const wide = d.length > 4 && d[1] === 0 && d[3] === 0
@@ -131,10 +143,9 @@ export class SidecarService {
       for (const raw of text.split(/\r?\n/)) {
         // strip ANSI colour codes before parsing the python log level
         // eslint-disable-next-line no-control-regex
-        const line = raw.trim().replace(/\[[0-9;]*m/g, '')
-        if (!line) continue
-        const { level, msg } = sidecarLevel(line)
-        logAt(level, 'ear', msg)
+        const line = raw.replace(/\s+$/, '').replace(/\[[0-9;]*m/g, '')
+        if (!line.trim()) continue
+        for (const entry of folder.push(line)) emitEntry(entry)
       }
     })
     proc.on('error', (e) => {
@@ -153,6 +164,14 @@ export class SidecarService {
       }
       if (code === 3) {
         this.setStatus('error', 'CUDA is not available for the ears. Switch STT device to CPU in Settings.')
+        return
+      }
+      if (code === EXIT_ASR_BROKEN && this.asrRestarts === 0) {
+        // first GPU-failure restart is free and immediate; a repeat falls into the normal backoff
+        this.asrRestarts++
+        this.setStatus('reconnecting', 'ears hit a GPU error, restarting')
+        this.trace('restart', { delayMs: 500, failures: this.failures, reason: 'asr_broken' })
+        this.restartTimer = setTimeout(() => this.start(), 500)
         return
       }
       const delay = BACKOFF_MS[Math.min(this.failures, BACKOFF_MS.length - 1)]!
@@ -193,18 +212,25 @@ export class SidecarService {
       } catch {
         return
       }
-      if (evt.type === 'pong') {
-        this.awaitingPongs = 0
-        return
+      // a throw here would surface as an uncaught exception inside ws's listener dispatch and
+      // take the main process down with it; log it with its stack instead
+      try {
+        if (evt.type === 'pong') {
+          this.awaitingPongs = 0
+          return
+        }
+        if (evt.type === 'status') this.setStatus('starting', evt.detail ?? evt.stage.replace('_', ' '))
+        else if (evt.type === 'ready') {
+          this.failures = 0
+          this.modelsReady = true
+          this.setStatus('ready', `${evt.asrModel} on ${evt.device} (${evt.loadS.toFixed(1)}s)`)
+          this.flushPending()
+        } else if (evt.type === 'error' && evt.fatal) this.setStatus(evt.code === 'asr_broken' ? 'reconnecting' : 'error', evt.message)
+        this.opts.onEvent(evt)
+      } catch (e) {
+        logError('sidecar', `event handler failed on ${evt.type}`, e)
+        this.trace('handler_error', { event: evt.type, message: (e as Error)?.message })
       }
-      if (evt.type === 'status') this.setStatus('starting', evt.detail ?? evt.stage.replace('_', ' '))
-      else if (evt.type === 'ready') {
-        this.failures = 0
-        this.modelsReady = true
-        this.setStatus('ready', `${evt.asrModel} on ${evt.device} (${evt.loadS.toFixed(1)}s)`)
-        this.flushPending()
-      } else if (evt.type === 'error' && evt.fatal) this.setStatus('error', evt.message)
-      this.opts.onEvent(evt)
     })
     ws.on('error', (e) => logAt('warn', 'sidecar', `ws error: ${e.message}`))
     ws.on('close', (code) => {
@@ -364,6 +390,7 @@ export class SidecarService {
   restart(): void {
     this.failures = 0
     this.wsRetries = 0
+    this.asrRestarts = 0
     if (this.restartTimer) clearTimeout(this.restartTimer)
     if (this.proc) {
       const p = this.proc

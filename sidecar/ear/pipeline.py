@@ -56,7 +56,7 @@ class Pipeline:
     def __init__(self, emit: Emit, models_dir: Path, endpoint: EndpointConfig, stt: SttConfig, *,
                  vad: Vad | None = None, turn: TurnModel | None = None, asr: Asr | None = None,
                  start_threads: bool = True, spawn: Spawn = _thread_spawn,
-                 clock: Callable[[], float] = time.perf_counter) -> None:
+                 clock: Callable[[], float] = time.perf_counter, probe_gpu: bool = True) -> None:
         self.emit = emit
         self.models_dir = models_dir
         self.cfg = endpoint
@@ -100,11 +100,21 @@ class Pipeline:
         self._last_partial_len = 0
         self._bucket = BargeInBucket(self.cfg)
         self._faults = RateLimiter(window_s=10.0, burst=3)
+        self._tb_logged: set[str] = set()
         self._turns = 0
         self._cuts_empty_final = 0
         self._last_stats_t = 0.0
         self._stats_dirty = False
         self.stats_every_s = 30.0
+        self._asr_failures = 0          # consecutive
+        self._asr_failures_total = 0
+        self._asr_reloads = 0
+        self.fatal_code: int | None = None
+        self.on_fatal: Callable[[int], None] | None = None
+        self.gpu_mib: int | None = None
+        self._probe_gpu_enabled = probe_gpu
+        self._gpu_probe_t = -1e9
+        self._gpu_probe_busy = threading.Event()
 
         if start_threads:
             threading.Thread(target=self._frame_loop, name="ear-frames", daemon=True).start()
@@ -221,8 +231,67 @@ class Pipeline:
             log.warning("%s: repeated %d more times in the last %.0f s", key, n, self._faults.window_s)
             self.emit({"type": "error", "message": f"{key} (repeated x{n})", "fatal": False})
         if ok:
-            log.exception("%s: %s", what, exc)
+            # the traceback once per fault kind for the life of the process; one line after that
+            if what in self._tb_logged:
+                log.error("%s: %s", what, str(exc).splitlines()[0] if str(exc) else type(exc).__name__)
+            else:
+                self._tb_logged.add(what)
+                log.exception("%s: %s", what, exc)
             self.emit({"type": "error", "message": f"{what}: {exc}", "fatal": False})
+
+    # ------------------------------------------------------------------ ASR health
+    def _asr_ok(self) -> None:
+        self._asr_failures = 0
+
+    def _asr_failed(self, exc: BaseException) -> None:
+        """A decode failed. After `asr_failure_limit` in a row reload the model once; if it keeps failing,
+        the process is broken (typically the CUDA arena after another app took the VRAM): go fatal so
+        the app restarts us."""
+        assert self.asr is not None
+        self._asr_failures += 1
+        self._asr_failures_total += 1
+        self._stats_dirty = True
+        if self._asr_failures < max(1, self.cfg.asr_failure_limit) or self.fatal_code is not None:
+            return
+        if self._asr_reloads == 0:
+            self._asr_reloads += 1
+            self._asr_failures = 0
+            try:
+                with self._asr_lock:
+                    self.asr.reload()
+                log.warning("asr reloaded after repeated failures (%s)", str(exc).splitlines()[0] if str(exc) else exc)
+                self.emit({"type": "error", "message": "speech recognition was reloaded after repeated failures", "fatal": False})
+                return
+            except Exception as reload_exc:  # noqa: BLE001
+                log.error("asr reload failed: %s", reload_exc)
+        self.fatal_code = 4
+        message = f"speech recognition keeps failing after a reload: {str(exc).splitlines()[0] if str(exc) else exc}"
+        log.error(message)
+        self.emit({"type": "error", "message": message, "fatal": True, "code": "asr_broken"})
+        if self.on_fatal:
+            self.on_fatal(4)
+
+    def _probe_gpu(self) -> None:
+        """`nvidia-smi` in a helper thread, at most every 30 s; the value rides on `stats`."""
+        if not self._probe_gpu_enabled or self._gpu_probe_busy.is_set() or self._t_audio - self._gpu_probe_t < 30.0:
+            return
+        self._gpu_probe_t = self._t_audio
+        self._gpu_probe_busy.set()
+
+        def job() -> None:
+            try:
+                import subprocess
+
+                out = subprocess.run(["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
+                                     capture_output=True, text=True, timeout=3)
+                first = (out.stdout or "").strip().splitlines()
+                self.gpu_mib = int(first[0].strip()) if first and first[0].strip().isdigit() else None
+            except Exception:  # noqa: BLE001
+                self.gpu_mib = None
+            finally:
+                self._gpu_probe_busy.clear()
+
+        self._spawn(job, ())
 
     def _do_reset(self) -> None:
         self._pending = np.zeros(0, dtype=np.float32)
@@ -365,10 +434,12 @@ class Pipeline:
         self._last_stats_t = self._t_audio
         self._stats_dirty = False
         p50 = self.ep.cost_p50_ms()
+        self._probe_gpu()
         self.emit({"type": "stats", "turns": self._turns, "turnChecks": self.ep.checks,
                    "turnCostP50Ms": None if p50 is None else round(p50, 1), "heldOnFiller": self.ep.held_on_filler,
                    "backchannels": self._bucket.backchannels, "cuts": self._bucket.cuts,
-                   "cutsEmptyFinal": self._cuts_empty_final})
+                   "cutsEmptyFinal": self._cuts_empty_final, "asrFailures": self._asr_failures_total,
+                   "asrReloads": self._asr_reloads, "gpuMiB": self.gpu_mib})
 
     def _close_utterance(self) -> None:
         assert self.vad is not None
@@ -389,14 +460,16 @@ class Pipeline:
             if not self._asr_lock.acquire(timeout=0.05):
                 return
             try:
-                text = self.asr.recognize(audio[-SR * 15:])
+                text = self.asr.recognize(audio[-SR * 10:])
             finally:
                 self._asr_lock.release()
+            self._asr_ok()
             self._last_partial_text = text
             if self._state == USER_SPEAKING and text:
                 self.emit({"type": "partial", "text": text})
         except Exception as exc:  # noqa: BLE001
             self._fault("partial decode failed", exc)
+            self._asr_failed(exc)
         finally:
             self._partial_busy.clear()
 
@@ -429,8 +502,10 @@ class Pipeline:
             try:
                 with self._asr_lock:
                     text = self.asr.recognize(audio)
+                self._asr_ok()
             except Exception as exc:  # noqa: BLE001
                 self._fault(f"{item['kind']} decode failed", exc)
+                self._asr_failed(exc)
         asr_ms = (self._clock() - t0) * 1e3
         duration_ms = len(audio) / SR * 1e3
         if item["kind"] == "segment":

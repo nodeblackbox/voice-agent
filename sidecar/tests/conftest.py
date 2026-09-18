@@ -79,7 +79,7 @@ def make_pipeline(events: list[dict[str, Any]], tmp_path):
               endpoint: EndpointConfig | None = None) -> Pipeline:
         p = Pipeline(events.append, tmp_path, endpoint or EndpointConfig(), SttConfig(),
                      vad=vad or FakeVad(), turn=turn or FakeTurn(), asr=asr or FakeAsr(),
-                     start_threads=False, spawn=inline_spawn, clock=Clock())
+                     start_threads=False, spawn=inline_spawn, clock=Clock(), probe_gpu=False)
         p.load()
         events.clear()
         return p

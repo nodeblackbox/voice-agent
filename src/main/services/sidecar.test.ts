@@ -158,6 +158,48 @@ describe('SidecarService', () => {
     expect(h.traces.some((t) => t.ev === 'sidecar.heartbeat_lost')).toBe(true)
   })
 
+  it('restarts promptly once after an ASR-broken exit (code 4), then falls back to normal backoff', async () => {
+    const h = harness()
+    h.svc.start()
+    h.procs[0]!.emit('exit', 4, null)
+    expect(h.statuses.at(-1)).toContain('GPU error')
+    await vi.advanceTimersByTimeAsync(500)
+    expect(h.procs).toHaveLength(2)
+    expect(h.traces.some((t) => t.ev === 'sidecar.restart' && t.reason === 'asr_broken')).toBe(true)
+    h.procs[1]!.emit('exit', 4, null)
+    expect(h.statuses.at(-1)).toContain('crashed')
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(h.procs).toHaveLength(3)
+  })
+
+  it('logs an exception thrown by the event handler instead of letting ws propagate it', async () => {
+    const h = harness()
+    const boom = h.svc as unknown as { opts: { onEvent: (e: SidecarEvent) => void } }
+    boom.opts.onEvent = (e) => {
+      if (e.type === 'final') throw new TypeError('handler exploded')
+    }
+    h.svc.start()
+    h.procs[0]!.stdout.write('EAR_PORT 9\n')
+    await vi.advanceTimersByTimeAsync(0)
+    const ws = h.ws()
+    ws.open()
+    expect(() => ws.receive({ type: 'final', text: 'x', durationMs: 1, asrMs: 1, turnP: null, reason: 'done' })).not.toThrow()
+    expect(h.traces.some((t) => t.ev === 'sidecar.handler_error' && t.event === 'final')).toBe(true)
+    expect(vi.mocked(console.error).mock.calls.some((c) => String(c[0]).includes('handler exploded'))).toBe(true)
+  })
+
+  it('folds sidecar tracebacks into one log entry', async () => {
+    const h = harness()
+    h.svc.start()
+    const err = vi.mocked(console.error)
+    const logs = vi.mocked(console.log)
+    const before = err.mock.calls.length + logs.mock.calls.length
+    h.procs[0]!.stderr.write('Traceback (most recent call last):\n  File "a.py", line 1, in f\n    raise X\nRuntimeError: CUBLAS failure 3\n12:00:00 INFO ear.pipeline: fine\n')
+    await vi.advanceTimersByTimeAsync(0)
+    const after = err.mock.calls.length + logs.mock.calls.length
+    expect(after - before).toBe(2)
+  })
+
   it('reports a clear status instead of guessing a foreign venv when no python is configured', () => {
     const h = harness()
     delete process.env.VA_PYTHON

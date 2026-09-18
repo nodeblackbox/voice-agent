@@ -57,6 +57,16 @@ class Parakeet:
     def recognize(self, audio: np.ndarray) -> str:
         return str(self.model.recognize(audio)).strip()
 
+    def reload(self) -> None:
+        """Drop every ONNX session and load the model again (after a CUDA/cuBLAS allocation failure)."""
+        import gc
+
+        log.warning("reloading %s on %s after repeated decode failures", self.model_name, self.device)
+        self.model = None
+        gc.collect()
+        self.__init__(self.model_name, self.device)  # type: ignore[misc]
+        self.warm_up()
+
     def warm_up(self) -> None:
         self.recognize(np.zeros(16000, dtype=np.float32))
         self.providers = self._active_providers()

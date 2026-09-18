@@ -122,6 +122,7 @@ export const TUNING = {
   runtime: {
     idleShutdownMs: n(300000, 0, 3600000, 60000, 'main', 'Ear idle shutdown', 'Unload the ear models after the microphone has been off this long. 0 never unloads. A restart is a full cold load.', { unit: 'ms' }),
     levelEveryFrames: n(3, 1, 30, 1, 'ear', 'Level meter every', 'Frames between VAD level events for the meter (3 = about 10 Hz). Never written to logs.', { unit: 'frames' }),
+    asrFailureLimit: n(3, 1, 10, 1, 'ear', 'ASR failures before reload', 'Consecutive failed decodes (typically a CUDA allocation error when another app took the VRAM) before the ears reload the speech model once; failing again after that restarts the ears.', { unit: 'failures' }),
     logTranscripts: { kind: 'boolean', default: true, scope: 'main', label: 'Log transcripts', doc: 'Include what was said (user and agent text) in the session trace files on disk.' },
     logLevel: { kind: 'enum', default: 'info', options: ['debug', 'info', 'warn', 'error'], scope: 'main', label: 'Log level', doc: 'Minimum level written to app.log. errors.log always gets warn and above.' }
   }

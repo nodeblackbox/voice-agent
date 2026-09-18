@@ -10,8 +10,9 @@ barge-in credit logic. It knows nothing about LLMs, TTS or the UI.
   `sidecar/`. `--port 0` = pick a free port on 127.0.0.1.
 - First line on **stdout** once the websocket is listening: `EAR_PORT <port>`. Everything else the
   sidecar logs goes to **stderr** (one line per event, prefixed with a level).
-- Exit code non-zero on fatal errors (CUDA missing when required, model download failure). The
-  parent restarts it with backoff.
+- Exit code non-zero on fatal errors: `3` = CUDA requested but unavailable, `4` = the ASR model kept
+  failing after a reload (GPU memory pressure), `1` = other load failures. The parent restarts it with
+  backoff (immediately once for `4`).
 - Models load *after* the port is announced so the client can connect and show progress.
 
 ## Transport
@@ -41,7 +42,7 @@ not exit.
 `maxSilenceLowMs` (3000), `bargeInThreshold` (0.75), `bargeInChunks` (10), `duckChunks` (3),
 `duckGain` (0.25), `bargeInDecay` (1), `bargeInReleaseChunks` (6), `partialEveryMs` (600),
 `silencePartialMs` (100), `prerollMs` (1000), `maxUtteranceMs` (120000), `segmentEveryMs` (30000),
-`fillerWords` (see below), `fillerHoldsHighTier` (true), `levelEveryFrames` (3).
+`fillerWords` (see below), `fillerHoldsHighTier` (true), `levelEveryFrames` (3), `asrFailureLimit` (3).
 
 - The silence cap adapts to Smart Turn: while its last score is below `turnLowThreshold` (the user
   is clearly mid-thought) the turn stays open for `maxSilenceLowMs`; otherwise `maxSilenceMs`.
@@ -53,6 +54,9 @@ not exit.
   end at `maxUtteranceMs`.
 - `prerollMs` must exceed `bargeInChunks` x 32 ms: after a barge-in `cut` the new utterance is seeded
   from the preroll buffer, and the cut only fires once that much speech has already gone by.
+- After `asrFailureLimit` consecutive decode failures (typically a CUDA/cuBLAS allocation error when
+  another process took the VRAM) the sidecar reloads the ASR model once; if decoding still fails it
+  sends `error{fatal:true, code:'asr_broken'}` and exits with code **4** so the app restarts it.
 
 The app derives every value here from `src/shared/tuning.ts`; see `docs/TUNING.md`.
 
@@ -69,8 +73,8 @@ The app derives every value here from `src/shared/tuning.ts`; see `docs/TUNING.m
 | `segment` | `text: string`, `index: number`, `durationMs`, `asrMs` | The older part of a long utterance, transcribed while the user keeps talking (every `segmentEveryMs`). The client concatenates segments in `index` order, then the `final` tail. |
 | `final` | `text: string`, `durationMs: number`, `asrMs: number`, `asrRtf`, `queuedMs`, `turnP: number \| null`, `reason`, `afterCut`, `segments: number` | Final transcript for the tail of the utterance (`segments` earlier parts were sent as `segment`). Empty `text` is possible (the client decides whether to drop it). |
 | `bargein` | `stage: 'duck' \| 'cut' \| 'release'` | Only while `agent_speaking`/`agent_thinking` is on. `duck`: sustained speech credit reached `duckChunks` (client lowers playback gain to `duckGain`). `release`: it was a short backchannel, restore gain. `cut`: credit reached `bargeInChunks`; the sidecar has already opened a new utterance (with preroll) and the client must cancel the current turn. A `speech_start` follows immediately after `cut`. |
-| `stats` | `asrRtf`, `turnCostMs`, `gpuMiB?` | Occasional. |
-| `error` | `message`, `fatal: bool` | Non-fatal errors keep the connection open. |
+| `stats` | `turns`, `turnChecks`, `turnCostP50Ms`, `heldOnFiller`, `backchannels`, `cuts`, `cutsEmptyFinal`, `asrFailures`, `asrReloads`, `gpuMiB?` (from `nvidia-smi` when available) | After every final, and every 30 s while barge-in activity happened. |
+| `error` | `message`, `fatal: bool`, `code?` (`asr_broken`) | Non-fatal errors keep the connection open. |
 | `pong` | – | |
 
 ## Turn flow (normal)

@@ -59,6 +59,8 @@ class EndpointConfig:
     # a trailing filler word holds the turn even at a high score, but only on the first check
     filler_holds_high_tier: bool = True
     level_every_frames: int = 3
+    # consecutive decode failures before the ASR model is reloaded; failing again after that is fatal
+    asr_failure_limit: int = 3
 
     def filler_set(self) -> frozenset[str]:
         return frozenset(w.strip().lower() for w in self.filler_words.split(",") if w.strip())
