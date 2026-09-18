@@ -101,6 +101,10 @@ staged mode:  credit ≥ duckChunks     → duck playback to duckGain      (a "m
 | `toolStallTimeoutMs` | 25000 | 25000 | Same, while a tool call is in flight. |
 | `retryBackoffMs` | 400 | 400 | Pause before the same-model retry on a transient error. |
 | `maxStepsAsk` / `maxStepsAgent` | 4 / 8 | — | Tool rounds per turn by mode (a recall plus a few memory edits needs three or four). Hitting the cap before the model said anything is spoken ("I've hit my limit for tool calls this turn…") and traced as `hitStepLimit`. |
+| `resumePhrases` | continue, go on, carry on, keep going… | — | Comma-separated. After you cut the agent off, saying one of these (alone or with a backchannel word around it, "yeah go on") replays the reply from the start of the interrupted sentence: exact words, no model call, first audio in well under a second. Traced as `turn.resume{kind: resume}`. |
+| `backchannelWords` | yeah, ok, mhm, right… | — | Comma-separated. Up to three of these after a cut ("mhm", "yeah right") is an acknowledgement, not a new turn. A question mark always makes it a new turn. |
+| `resumeOnBackchannel` | true | — | With instant barge-in a "mhm" cuts the agent; this replays the reply from the cut sentence (`turn.resume{kind: backchannel}`). Off = the agent stays quiet until a resume phrase or something new. A cut whose transcript is empty (a cough, speaker bleed) also resumes, at most twice per reply (`kind: empty`). |
+| `resumeWindowMs` | 20000 | — | How long after an interruption a resume phrase or backchannel still replays the rest; later they go to the model like any other message. 0 disables resuming. |
 | `uiFlushMs` | 40 | — | How often a streaming reply is pushed to the transcript and saved while tokens arrive. Per-token pushes made every token a full re-render, which starved audio playback after an hour of chat (`rendererMs` grew to 3 s). 0 = every token. |
 | `historyMessages` | 40 | — | Most recent messages sent to the model. |
 | `minUtteranceChars` | 2 | — | Transcripts shorter than this are dropped without a turn. |
@@ -171,13 +175,28 @@ field that confirms it.
 - **It waits too long after I finish.** Reason is `timeout` most of the time → the model never
   crossed `turnThreshold`; lower it to 0.6 before touching the caps. If reason is `done` but late, lower
   `checkEveryMs` or `minSilenceMs`. If it replies to a real ending only after `mergeHoldMs`, set that to 0.
-- **My "mhm" interrupts it.** `bargein` shows `cut` after a short burst → raise `bargeInChunks` (12)
-  or `bargeInThreshold`. `release` events are the healthy outcome for a backchannel.
+- **Me first, always.** That is the default: `bargeInInstant` cuts the agent ~100 ms into any
+  speech (`ear.bargein stage=cut` right after your first frames, never `duck`). After the cut, what
+  you said decides: a backchannel or resume phrase → `turn.resume` and the reply carries on from the
+  cut sentence; anything else → a new turn with the interruption note. If it *still* talks over you,
+  check `speech_start` → `bargein cut` in the trace is ~100 ms; if it is longer, `bargeInThreshold`
+  is too high for your mic level.
+- **My "mhm" makes it stop and start over.** By design it stops; it should then resume from the
+  start of the cut sentence (`turn.resume{kind: backchannel}`). If it restarts the whole reply or asks
+  the model instead, the utterance was not classified as a backchannel: add the word to
+  `backchannelWords`. To go back to the old tolerant behaviour turn `bargeInInstant` off.
+- **"Go on" doesn't continue.** No `turn.resume` in the trace → the resume window closed
+  (`resumeWindowMs`), the transcript had a question mark or extra content, or the phrase is not in
+  `resumePhrases`. `turn.resume` present but the wrong place → `turn.spoken_split` chars are off;
+  the renderer's `playback:cancelled` offset drives that.
 - **I have to shout to interrupt it.** Raise nothing; lower `bargeInThreshold` (0.65) and check
   `bargeInDecay` is 1, not higher.
-- **It interrupts itself with speakers on.** `stats.selfCutSuspects > 0` → raise `bargeInThreshold`;
-  if that is not enough the echo gate (Phase 4) is the fix, not more threshold.
-- **First word after I interrupt is missing.** `prerollMs` ≤ `bargeInChunks × 32`. Raise preroll.
+- **It interrupts itself with speakers on.** `self-cut suspects` in Diagnostics → raise
+  `bargeInThreshold` (0.85) or `duckChunks` (5). A self-cut with an empty transcript now resumes the
+  reply by itself (`turn.resume{kind: empty}`, at most twice per reply), so the damage is a stutter,
+  not a lost reply; if it happens every turn the echo gate is the fix, not more threshold.
+- **First word after I interrupt is missing.** `prerollMs` ≤ `duckChunks × 32` (instant mode) or
+  `bargeInChunks × 32` (staged). Raise preroll.
 - **It goes quiet during searches.** `fillerAfterMs` too high, or fillers disabled in Behaviour.
 - **Replies start late but the model was fast.** `ttfsMs - ttftMs` large → the first sentence is
   long; lower `firstMinWords` (3) or `maxChars`.

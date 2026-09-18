@@ -225,6 +225,8 @@ export interface UserTiming {
   /** This utterance interrupted the agent (barge-in cut). */
   cutAgent?: boolean
   speechEndAt?: number
+  /** This utterance made the app replay the interrupted reply instead of asking the model. */
+  resumed?: 'resume' | 'backchannel' | 'empty'
 }
 
 export interface ChatMessage {
@@ -241,6 +243,10 @@ export interface ChatMessage {
   spokenText?: string
   /** What was generated but never played. */
   unspokenText?: string
+  /** When the interruption happened (resume is offered for a while after it). */
+  interruptedAt?: number
+  /** Times this reply was replayed from its cut point. */
+  resumeCount?: number
   tool?: ToolActivity
   metrics?: TurnMetrics
   createdAt: number

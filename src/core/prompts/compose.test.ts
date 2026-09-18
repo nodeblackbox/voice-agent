@@ -47,7 +47,7 @@ describe('composeSystemPrompt', () => {
     expect(p).toContain('say what you are about to do in one sentence, then do it')
     // interruption note semantics
     expect(p).toContain('the user heard only the text before the note')
-    expect(p).toContain('continue from where you were cut, briefly')
+    expect(p).toContain('the app replays the rest itself')
     // search economy
     expect(p).toContain('one web_search plus at most one read_page usually answers')
     expect(p).toContain('do not re-search to double-check')

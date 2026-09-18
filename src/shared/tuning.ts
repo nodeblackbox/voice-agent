@@ -48,6 +48,10 @@ export interface TextParam extends ParamBase {
 
 export type TuningParam = NumberParam | BoolParam | EnumParam | TextParam
 
+export const DEFAULT_RESUME_PHRASES = 'continue, go on, carry on, keep going, keep talking, finish, finish that, resume, where were you, and then, what were you saying, keep on'
+
+export const DEFAULT_BACKCHANNEL_WORDS = 'yeah, yes, yep, yup, ok, okay, mhm, mm, mhmm, hmm, uh huh, right, sure, got it, i see, cool, alright, true, nice, wow, oh, ah, aha'
+
 export const DEFAULT_FILLER_WORDS =
   "um, umm, uh, uhh, er, ah, so, and, but, or, the, a, is, that, that's, like, because, which, yeah, well, wait, if, i, you, we, it's, with, for, to, then, basically, also, maybe, where, when, what, how, why, i'll, i'm, i've, we're, it'll, gonna, wanna, of, in, on, at, by, from, about, into, my, your, his, her, our, their, this, these, those, some, kind, sort, mean, really, actually, just, very"
 
@@ -104,6 +108,10 @@ export const TUNING = {
     continuationWindowMs: n(2500, 0, 6000, 250, 'core', 'Continuation window', 'If a transcript looks unfinished (ends on a filler word, fewer than "Merge min words", or a timeout on a low score) and you start speaking again within this long, the reply is cancelled silently and the two pieces become one turn. 0 disables merging.', { unit: 'ms' }),
     mergeMinWords: n(4, 1, 10, 1, 'core', 'Merge min words', 'Transcripts shorter than this always count as unfinished for the continuation window ("Yeah, so basically").', { unit: 'words' }),
     mergeHoldMs: n(0, 0, 2000, 100, 'core', 'Hold reply when unfinished', 'Wait this long before sending an unfinished-looking transcript to the model, so a continuation merges without ever starting a reply. Costs latency on real endings that happen to look unfinished; 0 = reply immediately and cancel if you continue.', { unit: 'ms' }),
+    resumePhrases: { kind: 'text', default: DEFAULT_RESUME_PHRASES, maxChars: 1000, scope: 'core', label: 'Resume phrases', doc: 'Comma-separated. After you cut the agent off, saying one of these (alone, or with a backchannel word around it) replays the reply from the start of the interrupted sentence, exact words, no model call.' },
+    backchannelWords: { kind: 'text', default: DEFAULT_BACKCHANNEL_WORDS, maxChars: 1000, scope: 'core', label: 'Backchannel words', doc: 'Comma-separated. An utterance of up to three of these ("mhm", "yeah right") after a cut is an acknowledgement, not a new turn.' },
+    resumeOnBackchannel: { kind: 'boolean', default: true, scope: 'core', label: 'Resume after a backchannel', doc: 'When a backchannel cut the agent off, replay the reply from the cut sentence. Off = the agent stays quiet until you say a resume phrase or something new.' },
+    resumeWindowMs: n(20000, 0, 120000, 1000, 'core', 'Resume window', 'How long after an interruption "go on" or a backchannel still replays the rest. Later, they go to the model like any other message. 0 disables resuming.', { unit: 'ms' }),
     uiFlushMs: n(40, 0, 500, 10, 'core', 'UI flush interval', 'How often a streaming reply is pushed to the transcript and saved while tokens arrive. Every token used to be a full transcript re-render, which starved audio playback in long sessions. 0 = every token.', { unit: 'ms' })
   },
   speech: {

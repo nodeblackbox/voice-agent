@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Brain, Check, Copy, Keyboard, Mic, Scissors, Square, Volume2, Zap } from 'lucide-react'
+import { Brain, Check, Copy, Keyboard, Mic, Play, Scissors, Square, Volume2, Zap } from 'lucide-react'
 import type { ChatMessage, UserTiming } from '@shared/types'
 import { T } from '../../theme'
 import { useStore } from '../../state/store'
@@ -49,6 +49,13 @@ function TimingChips({ t }: { t: UserTiming }) {
     chips.push(
       <Chip key="cut" color={T.amber} title="this utterance interrupted the agent">
         <Zap size={10} /> cut in
+      </Chip>
+    )
+  }
+  if (t.resumed) {
+    chips.push(
+      <Chip key="resumed" color={T.cyan} title={t.resumed === 'backchannel' ? 'just an acknowledgement: the reply carried on from the cut sentence' : t.resumed === 'empty' ? 'the cut had no words in it: the reply carried on' : 'you asked for the rest: replayed from the cut sentence, no model call'}>
+        <Play size={10} /> resumed
       </Chip>
     )
   }
@@ -200,6 +207,11 @@ const AssistantBubble = memo(function AssistantBubble({
         {m.interrupted && (
           <span className="inline-flex items-center gap-1 text-xs rounded px-1.5 py-0.5 ml-1" style={{ color: T.amber, background: T.amberTint }} title={interruptedTitle}>
             <Square size={9} /> interrupted
+          </span>
+        )}
+        {!m.interrupted && (m.resumeCount ?? 0) > 0 && (
+          <span className="inline-flex items-center gap-1 text-xs rounded px-1.5 py-0.5 ml-1" style={{ color: T.cyan, background: T.cyanTint }} title="replayed from the cut sentence after an interruption">
+            <Play size={9} /> resumed{(m.resumeCount ?? 0) > 1 ? ` ×${m.resumeCount}` : ''}
           </span>
         )}
         {(m.metrics?.speechEndToAudioMs ?? m.metrics?.ttfaMs) !== undefined && (

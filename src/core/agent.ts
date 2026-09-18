@@ -37,6 +37,10 @@ import { buildModelMessages, compactToolResult } from './turn/history'
 import { splitSpoken, type CutPoint, type SpokenChunk } from './turn/spoken'
 import { mergeTexts, parseFillerWords, unfinishedReason } from './turn/continuation'
 import { Coalescer } from './turn/coalesce'
+import { classifyAfterCut, resumeText } from './turn/resume'
+
+/** Why an interrupted reply is being replayed: asked for, acknowledged, or cut by a wordless interruption. */
+type ResumeKind = 'resume' | 'backchannel' | 'empty'
 import { summarize } from './metrics/summary'
 import type { Trace } from './trace'
 
@@ -106,6 +110,8 @@ interface ActiveTurn {
   /** Wall-clock moment the ears closed the user's turn (voice turns only). */
   speechEndAt?: number
   ttsDroppedBefore: number
+  /** This turn replays an interrupted reply from its cut sentence; no model call. */
+  resume?: { kind: ResumeKind; heardBefore: string }
 }
 
 const words = (s: string): string[] => s.toLowerCase().match(/[a-z0-9']+/g) ?? []
@@ -120,6 +126,9 @@ export function wordOverlap(a: string, b: string): number {
 }
 
 const clip = (s: string, max: number): string => (s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s)
+
+/** A cut with an empty transcript resumes the reply at most this often per message (guards a self-cut loop). */
+const MAX_EMPTY_RESUMES = 2
 
 export class Agent {
   readonly sm: StateMachine
@@ -308,19 +317,124 @@ export class Agent {
     const parts = (pending?.parts ?? 1) + (pending ? 1 : 0)
     if (!full.trim() || (tooShort && !segments && !pending)) {
       this.tr('turn.dropped', { reason: 'empty-transcript', chars: tail.length, asrMs, afterCut: meta.afterCut === true })
+      // the ears cut the agent but heard nothing usable (speaker bleed, a cough): pick the reply back up
+      const target = meta.afterCut ? this.resumable() : null
+      if (target && (target.resumeCount ?? 0) < MAX_EMPTY_RESUMES) {
+        void this.resumeReply(target, 'empty', '', 'voice', { asrMs, afterCut: true })
+        return
+      }
       this.sm.blip()
       if (this.sm.state === 'thinking') this.sm.done()
       return
     }
     if (pending) this.tr('turn.merged', { parts, waitedMs: Date.now() - pending.since, text: full })
-    void this.handleInput(full, 'voice', {
+    const voiceMeta: VoiceMeta = {
       asrMs,
       queuedMs: meta.queuedMs,
       afterCut: meta.afterCut,
       reuseUserId: segments?.userMsgId ?? pending?.userMsgId,
       parts: pending ? parts : undefined,
       segments: segments ? segments.texts.length : meta.segments
-    })
+    }
+    if (!segments && !pending) {
+      const target = this.resumable()
+      const kind = target ? this.afterCutKind(full) : null
+      if (target && kind) {
+        void this.resumeReply(target, kind, full, 'voice', voiceMeta)
+        return
+      }
+    }
+    void this.handleInput(full, 'voice', voiceMeta)
+  }
+
+  /** The interrupted reply that "go on" would refer to, while the resume window is open. */
+  private resumable(): ChatMessage | null {
+    if (this.turn) return null
+    const windowMs = this.deps.settings().brain.resumeWindowMs
+    if (windowMs <= 0) return null
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const m = this.messages[i]!
+      if (m.role !== 'assistant') continue
+      if (!m.interrupted || !m.unspokenText?.trim()) return null
+      return Date.now() - (m.interruptedAt ?? 0) <= windowMs ? m : null
+    }
+    return null
+  }
+
+  /** 'resume' or 'backchannel' when the utterance asks for the rest of an interrupted reply; null when it is a new turn. */
+  private afterCutKind(text: string): Exclude<ResumeKind, 'empty'> | null {
+    const b = this.deps.settings().brain
+    const kind = classifyAfterCut(text, { resumePhrases: b.resumePhrases, backchannelWords: b.backchannelWords })
+    if (kind === 'resume') return kind
+    if (kind === 'backchannel' && b.resumeOnBackchannel) return kind
+    return null
+  }
+
+  /**
+   * Replay an interrupted reply from the start of its cut sentence: same assistant message, new turn,
+   * no model call. The user's utterance still becomes a bubble so the transcript shows what happened.
+   */
+  private async resumeReply(target: ChatMessage, kind: ResumeKind, userText: string, via: 'voice' | 'text', voiceMeta: VoiceMeta = {}): Promise<void> {
+    const text = resumeText(target.spokenText, target.unspokenText)
+    if (!text) {
+      if (userText) await this.handleInput(userText, via, voiceMeta)
+      return
+    }
+    if (this.turn) this.cancelTurn('new-input')
+    this.stopReading()
+    const settings = this.deps.settings()
+    const turnId = crypto.randomUUID()
+    const speechEnd = via === 'voice' ? this.lastSpeechEnd : null
+    this.lastSpeechEnd = null
+    if (userText) {
+      const timing = this.userTiming(speechEnd, voiceMeta)
+      this.upsert({ id: crypto.randomUUID(), turnId, sessionId: this.sessionId, role: 'user', text: userText, via, timing: { ...timing, resumed: kind }, createdAt: Date.now() })
+    }
+    const controller = new AbortController()
+    const speaker = this.newSpeaker(turnId, settings, false, controller)
+    const heardBefore = target.spokenText ?? ''
+    const turn: ActiveTurn = {
+      id: turnId,
+      controller,
+      assistant: target,
+      chunks: new Map(),
+      startedSeqs: new Set(),
+      finishedSeqs: new Set(),
+      speaker,
+      llmDone: false,
+      drained: false,
+      startedAt: Date.now(),
+      speechEndAt: speechEnd?.at,
+      ttsDroppedBefore: edgeTtsStats.droppedFrames,
+      resume: { kind, heardBefore }
+    }
+    this.turn = turn
+    this.mergeable = null
+    target.turnId = turnId
+    target.interrupted = false
+    target.streaming = false
+    target.resumeCount = (target.resumeCount ?? 0) + 1
+    target.metrics = { ...target.metrics, interrupted: false }
+    this.upsert(target)
+    this.sm.think()
+    this.deps.ears.agentSpeaking(true)
+    this.tr('turn.resume', { kind, userText, heardChars: heardBefore.length, remainingChars: text.length, count: target.resumeCount, text })
+
+    const filter = new SpeakableFilter(this.style(settings).format)
+    const chunker = new SentenceChunker(settings.speech.maxChars, settings.speech.firstMinWords)
+    for (const sentence of chunker.feed(filter.feed(text))) speaker.say(sentence)
+    for (const sentence of chunker.flush()) speaker.say(sentence)
+    try {
+      await speaker.finish()
+      if (this.turn !== turn) return
+      turn.llmDone = true
+      if (turn.drained) this.finishTurn(turn)
+      else this.armDrainTimeout(turn)
+    } catch (e) {
+      if (this.turn !== turn) return
+      this.deps.log(`resume failed: ${(e as Error).message}`)
+      this.finishTurn(turn)
+    }
   }
 
   onBargeIn(stage: 'duck' | 'cut' | 'release'): void {
@@ -345,7 +459,7 @@ export class Agent {
       this.sm.firstAudio()
       const m = t.assistant?.metrics ?? {}
       const now = Date.now()
-      m.ttfaMs = now - (t.assistant?.createdAt ?? now)
+      m.ttfaMs = now - t.startedAt
       if (t.speechEndAt !== undefined) m.speechEndToAudioMs = now - t.speechEndAt
       if (t.speaker.firstSynthMs !== undefined) m.ttsFirstMs = t.speaker.firstSynthMs
       if (t.speaker.firstByteMs !== undefined) m.ttsFirstByteMs = t.speaker.firstByteMs
@@ -393,47 +507,34 @@ export class Agent {
 
   // ---- turns ------------------------------------------------------------------------------
   async send(text: string): Promise<void> {
-    await this.handleInput(text.trim(), 'text')
+    const clean = text.trim()
+    const target = clean ? this.resumable() : null
+    const kind = target ? this.afterCutKind(clean) : null
+    if (target && kind) await this.resumeReply(target, kind, clean, 'text')
+    else await this.handleInput(clean, 'text')
   }
 
-  private async handleInput(text: string, via: 'voice' | 'text', voiceMeta: VoiceMeta = {}): Promise<void> {
-    if (!text) return
-    if (this.turn) this.cancelTurn('new-input')
-    this.stopReading()
-    const settings = this.deps.settings()
-    const turnId = crypto.randomUUID()
-    const speechEnd = via === 'voice' ? this.lastSpeechEnd : null
-    this.lastSpeechEnd = null
-    const timing: UserTiming | undefined = speechEnd
-      ? {
-          speechMs: speechEnd.speechMs,
-          silenceMs: speechEnd.silenceMs,
-          endReason: speechEnd.reason,
-          turnP: speechEnd.turnP,
-          capMs: speechEnd.capMs ?? null,
-          merged: (voiceMeta.parts ?? 1) > 1 || undefined,
-          parts: voiceMeta.parts,
-          segments: voiceMeta.segments || undefined,
-          cutAgent: voiceMeta.afterCut || undefined,
-          speechEndAt: speechEnd.at
-        }
-      : undefined
-    const existing = voiceMeta.reuseUserId ? this.messages.find((m) => m.id === voiceMeta.reuseUserId) : undefined
-    const user: ChatMessage = existing
-      ? { ...existing, turnId, text, timing, streaming: false }
-      : { id: crypto.randomUUID(), turnId, sessionId: this.sessionId, role: 'user', text, via, timing, createdAt: Date.now() }
-    this.upsert(user)
-    if (this.messages.filter((m) => m.role === 'user').length === 1) {
-      this.deps.store.renameSession(this.sessionId, text.split(/\s+/).slice(0, 7).join(' ').slice(0, 60))
-      this.deps.emit({ type: 'sessions-changed' })
+  private userTiming(speechEnd: (SpeechEndInfo & { at: number }) | null, voiceMeta: VoiceMeta): UserTiming | undefined {
+    if (!speechEnd) return undefined
+    return {
+      speechMs: speechEnd.speechMs,
+      silenceMs: speechEnd.silenceMs,
+      endReason: speechEnd.reason,
+      turnP: speechEnd.turnP,
+      capMs: speechEnd.capMs,
+      merged: voiceMeta.parts !== undefined && voiceMeta.parts > 1 ? true : undefined,
+      parts: voiceMeta.parts,
+      segments: voiceMeta.segments || undefined,
+      cutAgent: voiceMeta.afterCut || undefined,
+      speechEndAt: speechEnd.at
     }
+  }
 
-    const controller = new AbortController()
-    const speakThisTurn = via === 'voice' || settings.behaviour.speakTypedReplies
-    const speaker = new Speaker(
+  private newSpeaker(turnId: string, settings: Settings, silent: boolean, controller: AbortController): Speaker {
+    return new Speaker(
       turnId,
       {
-        silent: !speakThisTurn,
+        silent,
         engine: this.engineFor(settings),
         fallback: this.system,
         voice: settings.voice,
@@ -450,6 +551,30 @@ export class Agent {
       },
       controller.signal
     )
+  }
+
+  private async handleInput(text: string, via: 'voice' | 'text', voiceMeta: VoiceMeta = {}): Promise<void> {
+    if (!text) return
+    if (this.turn) this.cancelTurn('new-input')
+    this.stopReading()
+    const settings = this.deps.settings()
+    const turnId = crypto.randomUUID()
+    const speechEnd = via === 'voice' ? this.lastSpeechEnd : null
+    this.lastSpeechEnd = null
+    const timing = this.userTiming(speechEnd, voiceMeta)
+    const existing = voiceMeta.reuseUserId ? this.messages.find((m) => m.id === voiceMeta.reuseUserId) : undefined
+    const user: ChatMessage = existing
+      ? { ...existing, turnId, text, timing, streaming: false }
+      : { id: crypto.randomUUID(), turnId, sessionId: this.sessionId, role: 'user', text, via, timing, createdAt: Date.now() }
+    this.upsert(user)
+    if (this.messages.filter((m) => m.role === 'user').length === 1) {
+      this.deps.store.renameSession(this.sessionId, text.split(/\s+/).slice(0, 7).join(' ').slice(0, 60))
+      this.deps.emit({ type: 'sessions-changed' })
+    }
+
+    const controller = new AbortController()
+    const speakThisTurn = via === 'voice' || settings.behaviour.speakTypedReplies
+    const speaker = this.newSpeaker(turnId, settings, !speakThisTurn, controller)
     // Open the Edge socket while the model thinks so the first sentence skips the handshake.
     if (speakThisTurn && this.engineFor(settings) === this.edge) {
       const t0 = Date.now()
@@ -688,10 +813,16 @@ export class Agent {
     const a = t.assistant
     if (a) {
       a.metrics = { ...a.metrics, totalMs: Date.now() - t.startedAt, fillers: t.speaker.fillers, interrupted: false }
+      if (t.resume) {
+        // the whole reply has now been heard
+        a.spokenText = undefined
+        a.unspokenText = undefined
+      }
       this.upsert(a)
       this.deps.emit({ type: 'metrics', turnId: t.id, metrics: a.metrics })
     }
     this.tr('turn.end', {
+      resumed: t.resume?.kind,
       interrupted: false,
       totalMs: Date.now() - t.startedAt,
       chars: a?.text.length ?? 0,
@@ -710,8 +841,15 @@ export class Agent {
 
   private applySpokenSplit(t: ActiveTurn, a: ChatMessage, cut: CutPoint | null): void {
     const split = splitSpoken(a.text, [...t.chunks.values()], t.finishedSeqs, t.startedSeqs, cut)
-    a.spokenText = split.spoken
-    a.unspokenText = split.unspoken
+    if (t.resume) {
+      // a replay starts mid-text: what was heard is everything up to the new cut, not just this turn's chunks
+      const full = a.text.replace(/\s+/g, ' ').trim()
+      a.unspokenText = split.unspoken
+      a.spokenText = split.unspoken ? full.slice(0, Math.max(0, full.length - split.unspoken.length)).trim() : full
+    } else {
+      a.spokenText = split.spoken
+      a.unspokenText = split.unspoken
+    }
     a.metrics = { ...a.metrics, spokenChars: split.spoken.length, unspokenChars: split.unspoken.length }
     this.upsert(a)
     this.deps.emit({ type: 'metrics', turnId: t.id, metrics: a.metrics })
@@ -742,6 +880,7 @@ export class Agent {
       a.streaming = false
       if (a.text) {
         a.interrupted = true
+        a.interruptedAt = Date.now()
         a.metrics = { ...a.metrics, interrupted: true, totalMs: Date.now() - t.startedAt, fillers: t.speaker.fillers }
         // provisional split now; refined when the renderer reports where the cut landed
         this.applySpokenSplit(t, a, null)
