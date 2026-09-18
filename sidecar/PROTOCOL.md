@@ -39,8 +39,8 @@ not exit.
 `endpoint` fields (all optional, defaults in parentheses):
 `vadThreshold` (0.5), `minSpeechMs` (250), `minSilenceMs` (250), `maxSilenceMs` (1500),
 `checkEveryMs` (200), `turnThreshold` (0.7), `turnHighThreshold` (0.9), `turnLowThreshold` (0.3),
-`maxSilenceLowMs` (3000), `bargeInThreshold` (0.75), `bargeInChunks` (10), `duckChunks` (3),
-`duckGain` (0.25), `bargeInDecay` (1), `bargeInReleaseChunks` (6), `partialEveryMs` (600),
+`maxSilenceLowMs` (3000), `bargeInThreshold` (0.75), `bargeInInstant` (true), `bargeInChunks` (10),
+`duckChunks` (3), `duckGain` (0.25), `bargeInDecay` (1), `bargeInReleaseChunks` (6), `partialEveryMs` (600),
 `silencePartialMs` (100), `prerollMs` (1000), `maxUtteranceMs` (120000), `segmentEveryMs` (30000),
 `fillerWords` (see below), `fillerHoldsHighTier` (true), `levelEveryFrames` (3), `asrFailureLimit` (3).
 
@@ -72,7 +72,7 @@ The app derives every value here from `src/shared/tuning.ts`; see `docs/TUNING.m
 | `speech_end` | `reason: 'done' \| 'timeout'`, `silenceMs`, `turnP: number \| null`, `speechMs`, `checks: [{silenceMs, p, heldOnFiller, lastWord, capMs}]`, `afterCut`, `capMs: number \| null` (which cap fired on a timeout), `segments` | Endpointer fired. The final decode starts now. |
 | `segment` | `text: string`, `index: number`, `durationMs`, `asrMs` | The older part of a long utterance, transcribed while the user keeps talking (every `segmentEveryMs`). The client concatenates segments in `index` order, then the `final` tail. |
 | `final` | `text: string`, `durationMs: number`, `asrMs: number`, `asrRtf`, `queuedMs`, `turnP: number \| null`, `reason`, `afterCut`, `segments: number` | Final transcript for the tail of the utterance (`segments` earlier parts were sent as `segment`). Empty `text` is possible (the client decides whether to drop it). |
-| `bargein` | `stage: 'duck' \| 'cut' \| 'release'` | Only while `agent_speaking`/`agent_thinking` is on. `duck`: sustained speech credit reached `duckChunks` (client lowers playback gain to `duckGain`). `release`: it was a short backchannel, restore gain. `cut`: credit reached `bargeInChunks`; the sidecar has already opened a new utterance (with preroll) and the client must cancel the current turn. A `speech_start` follows immediately after `cut`. |
+| `bargein` | `stage: 'duck' \| 'cut' \| 'release'` | Only while `agent_speaking`/`agent_thinking` is on. With `bargeInInstant` (the default) only `cut` is ever sent: credit reached `duckChunks` (~100 ms), the sidecar has already opened a new utterance (with preroll) and the client must cancel the current turn. In staged mode (`bargeInInstant: false`): `duck`: credit reached `duckChunks` (client lowers playback gain to `duckGain`); `release`: it was a short backchannel, restore gain; `cut`: credit reached `bargeInChunks`. A `speech_start` follows immediately after `cut`. |
 | `stats` | `turns`, `turnChecks`, `turnCostP50Ms`, `heldOnFiller`, `backchannels`, `cuts`, `cutsEmptyFinal`, `asrFailures`, `asrReloads`, `gpuMiB?` (from `nvidia-smi` when available) | After every final, and every 30 s while barge-in activity happened. |
 | `error` | `message`, `fatal: bool`, `code?` (`asr_broken`) | Non-fatal errors keep the connection open. |
 | `pong` | – | |

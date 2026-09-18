@@ -29,6 +29,8 @@ Spawn = Callable[[Callable[..., None], tuple], None]
 
 LISTENING = "listening"
 USER_SPEAKING = "user_speaking"
+# frames (~0.5 s) that always stay in the live utterance when a segment is cut without a quiet frame
+SEGMENT_KEEP_TAIL = 16
 
 
 class Vad(Protocol):
@@ -361,6 +363,8 @@ class Pipeline:
 
         if self._announced and (now - self._t_segment) * 1e3 >= cfg.segment_every_ms:
             self._emit_segment(now)
+        if not self._utt:
+            return
 
         decision = self.ep.update(lambda: np.concatenate(self._utt), sil_ms, self._last_partial_text)
         if decision is None and (now - self._t_on) * 1e3 >= cfg.max_utterance_ms:
@@ -392,14 +396,19 @@ class Pipeline:
         stays the live utterance, so partial captions and end-of-turn scoring continue on it."""
         cfg = self.cfg
         n = len(self._utt)
+        if n <= SEGMENT_KEEP_TAIL:
+            self._t_segment = now
+            return
         lookback = min(n - 1, int(2.0 * SR / CHUNK))
-        cut = n
+        # no quiet frame in the look-back (the user has not paused for 2 s): keep a short tail
+        # rather than handing everything over, so the live utterance is never empty
+        cut = n - SEGMENT_KEEP_TAIL
         for i in range(n - 1, max(0, n - 1 - lookback), -1):
             if self._utt_p[i] < cfg.vad_threshold:
                 cut = i + 1
                 break
-        if cut <= 0:
-            cut = n
+        if cut <= 0 or cut >= n:
+            cut = n - SEGMENT_KEEP_TAIL
         head = self._utt[:cut]
         self._utt = self._utt[cut:]
         self._utt_p = self._utt_p[cut:]

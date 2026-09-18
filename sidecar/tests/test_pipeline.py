@@ -14,6 +14,11 @@ def speak(pipeline, n: int) -> None:
         pipeline.process_frame(f)
 
 
+def staged(**overrides) -> EndpointConfig:
+    """The duck -> cut -> release barge-in behaviour (instant mode is the default)."""
+    return EndpointConfig(barge_in_instant=False, **overrides)
+
+
 def test_load_with_injected_models_reports_ready(make_pipeline, events):
     p = make_pipeline()
     assert p.ready and p.stage == "ready"
@@ -124,6 +129,20 @@ def test_long_utterance_is_segmented_while_it_stays_open(make_pipeline, events):
     assert final["segments"] == 2 and final["durationMs"] < 2000
 
 
+def test_segment_without_a_quiet_frame_keeps_a_tail_and_never_errors(make_pipeline, events):
+    from ear.pipeline import SEGMENT_KEEP_TAIL
+
+    cfg = EndpointConfig(segment_every_ms=1000, max_utterance_ms=100000)
+    # continuous speech: no quiet frame anywhere, so the cut cannot land on a pause
+    p = make_pipeline(vad=FakeVad(default=0.9), endpoint=cfg, asr=FakeAsr("part"))
+    speak(p, 100)  # 3.2 s -> three segments
+    assert p._state == "user_speaking"
+    assert p._segments == 3
+    assert len(p._utt) >= SEGMENT_KEEP_TAIL
+    assert "error" not in kinds(events)
+    assert p.pending_decodes() == 3
+
+
 def test_pause_triggers_an_immediate_partial_for_the_filler_guard(make_pipeline, events):
     asr = FakeAsr("and then I'll")
     p = make_pipeline(vad=FakeVad([0.9] * 12, default=0.0), asr=asr)
@@ -136,8 +155,17 @@ def test_pause_triggers_an_immediate_partial_for_the_filler_guard(make_pipeline,
     assert len([e for e in events if e["type"] == "partial"]) == partials_before + 1
 
 
-def test_barge_in_ducks_then_cuts_and_opens_an_utterance(make_pipeline, events):
+def test_instant_barge_in_cuts_after_duck_chunks_without_ducking(make_pipeline, events):
     p = make_pipeline(vad=FakeVad(default=0.9))
+    p.set_agent_speaking(True)
+    speak(p, 3)  # ~100 ms of speech
+    assert [e["stage"] for e in events if e["type"] == "bargein"] == ["cut"]
+    assert kinds(events) == ["bargein", "speech_start"]
+    assert not p.agent_speaking and p._state == "user_speaking" and p._after_cut
+
+
+def test_barge_in_ducks_then_cuts_and_opens_an_utterance(make_pipeline, events):
+    p = make_pipeline(vad=FakeVad(default=0.9), endpoint=staged())
     p.set_agent_speaking(True)
     speak(p, 3)
     assert kinds(events) == ["bargein"] and events[-1]["stage"] == "duck"
@@ -159,8 +187,8 @@ def test_barge_in_uses_the_higher_threshold(make_pipeline, events):
     assert p._state == "user_speaking"
 
 
-def test_backchannel_is_released_not_cut(make_pipeline, events):
-    p = make_pipeline(vad=FakeVad([0.9] * 4, default=0.0))
+def test_backchannel_is_released_not_cut_in_staged_mode(make_pipeline, events):
+    p = make_pipeline(vad=FakeVad([0.9] * 4, default=0.0), endpoint=staged())
     p.set_agent_speaking(True)
     speak(p, 4 + 6)
     assert [e["stage"] for e in events if e["type"] == "bargein"] == ["duck", "release"]
@@ -249,7 +277,7 @@ def test_old_hard_reset_logic_would_have_failed_on_fluttery_speech():
 
 def test_sustained_speech_with_flutter_still_cuts(make_pipeline, events):
     scores = [0.4 if i % 6 == 5 else 0.85 for i in range(40)]
-    p = make_pipeline(vad=FakeVad(scores, default=0.0))
+    p = make_pipeline(vad=FakeVad(scores, default=0.0), endpoint=staged())
     p.set_agent_speaking(True)
     speak(p, 40)
     assert "cut" in bargein_stages(events)
@@ -258,7 +286,7 @@ def test_sustained_speech_with_flutter_still_cuts(make_pipeline, events):
 def test_one_utterance_with_micro_pauses_cuts_without_release_spam(make_pipeline, events):
     # 67 % duty cycle speech: escalates to a real interrupt and never flickers "release" on the way
     scores = ([0.85] * 4 + [0.3] * 2) * 5
-    p = make_pipeline(vad=FakeVad(scores, default=0.0))
+    p = make_pipeline(vad=FakeVad(scores, default=0.0), endpoint=staged())
     p.set_agent_speaking(True)
     speak(p, len(scores))
     stages = bargein_stages(events)
@@ -268,7 +296,7 @@ def test_one_utterance_with_micro_pauses_cuts_without_release_spam(make_pipeline
 
 def test_three_separate_bursts_are_three_backchannels(make_pipeline, events):
     scores = ([0.85] * 4 + [0.1] * 10) * 3
-    p = make_pipeline(vad=FakeVad(scores, default=0.0))
+    p = make_pipeline(vad=FakeVad(scores, default=0.0), endpoint=staged())
     p.set_agent_speaking(True)
     speak(p, len(scores))
     stages = bargein_stages(events)
@@ -278,7 +306,7 @@ def test_three_separate_bursts_are_three_backchannels(make_pipeline, events):
 
 
 def test_cut_seeds_the_utterance_with_the_speech_that_triggered_it(make_pipeline, events):
-    p = make_pipeline(vad=FakeVad(default=0.9))
+    p = make_pipeline(vad=FakeVad(default=0.9), endpoint=staged())
     p.set_agent_speaking(True)
     speak(p, 10)  # exactly barge_in_chunks frames of speech -> cut
     cut = next(e for e in events if e["type"] == "bargein" and e["stage"] == "cut")

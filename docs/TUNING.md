@@ -67,24 +67,30 @@ the renderer (DevTools, an extension, a huge tool result).
 
 ## Ears: barge-in (`endpoint`)
 
-Barge-in is a leaky bucket of *net* speech credit while the agent is speaking or thinking:
+Barge-in is a leaky bucket of *net* speech credit while the agent is speaking or thinking. **You
+always have priority**: in the default *instant* mode the agent is cut the moment `duckChunks` of
+credit exist (≈100 ms of speech), there is no ducked phase and nothing is ever released. What you
+said then decides what happens: a backchannel ("mhm", "yeah") or "go on" resumes the reply from the
+cut sentence with no model call (see `resumePhrases`); anything else is your new turn.
 
 ```
 frame p ≥ bargeInThreshold → credit += 1 (capped at bargeInChunks + duckChunks)
 frame p <  bargeInThreshold → credit -= bargeInDecay
-credit ≥ duckChunks     → duck playback to duckGain      (a "mhm" gets this far)
-credit ≥ bargeInChunks  → cut: cancel the turn, open a new utterance from preroll
-ducked and bargeInReleaseChunks quiet frames → release: it was a backchannel, restore gain
+instant mode: credit ≥ duckChunks → cut: cancel the turn, open a new utterance from preroll
+staged mode:  credit ≥ duckChunks     → duck playback to duckGain      (a "mhm" gets this far)
+              credit ≥ bargeInChunks  → cut
+              ducked and bargeInReleaseChunks quiet frames → release: backchannel, restore gain
 ```
 
 | key | default | old agent | what it does |
 |---|---|---|---|
-| `bargeInThreshold` | 0.75 | 0.75 | VAD probability that counts as a hit while the agent is busy. Higher than `vadThreshold` so speaker bleed and room noise do not build credit. If the agent interrupts itself with open speakers, raise this first and check `stats.selfCutSuspects`. |
-| `bargeInChunks` | 10 | 10 | Credits to cut (10 ≈ 320 ms of sustained speech). |
-| `duckChunks` | 3 | 3 | Credits to duck (3 ≈ 96 ms). |
+| `bargeInInstant` | true | — | Instant mode (above). Turn off for the staged duck → cut → release behaviour, which tolerates backchannels but lets the agent talk over you for ~300 ms. |
+| `bargeInThreshold` | 0.75 | 0.75 | VAD probability that counts as a hit while the agent is busy. Higher than `vadThreshold` so speaker bleed and room noise do not build credit. If the agent interrupts itself with open speakers, raise this first (0.85) and check `self-cut suspects` in Diagnostics. |
+| `bargeInChunks` | 10 | 10 | Staged mode only: credits to cut (10 ≈ 320 ms of sustained speech). |
+| `duckChunks` | 3 | 3 | Credits to cut (instant) or duck (staged); 3 ≈ 100 ms. The second knob for self-cuts with speakers (5 ≈ 160 ms). |
 | `duckGain` | 0.25 | 0.25 | Volume while ducked; the renderer ramps to it over `playback.duckRampMs`. |
 | `bargeInDecay` | 1 | 1 | Credit lost per quiet frame. Real speech is never uniformly above threshold; a hard reset on any miss (the old bug) meant sustained fluttery speech never reached the cut. Keep this small. |
-| `bargeInReleaseChunks` | 6 | 6 | Quiet frames after a duck before it is called a backchannel (6 ≈ 190 ms). Too low and one utterance with micro-pauses flickers the volume and spams "backchannel" in the trace. |
+| `bargeInReleaseChunks` | 6 | 6 | Staged mode only: quiet frames after a duck before it is called a backchannel (6 ≈ 190 ms). Too low and one utterance with micro-pauses flickers the volume and spams "backchannel" in the trace. |
 
 ## Brain (`brain`)
 

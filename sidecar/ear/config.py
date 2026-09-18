@@ -44,6 +44,8 @@ class EndpointConfig:
     barge_in_threshold: float = 0.75
     barge_in_chunks: int = 10
     duck_chunks: int = 3
+    # instant: the agent is cut as soon as credit reaches `duck_chunks`; no ducking, no release
+    barge_in_instant: bool = True
     duck_gain: float = 0.25
     barge_in_decay: int = 1
     barge_in_release_chunks: int = 6

@@ -5,7 +5,23 @@ from ear.config import EndpointConfig
 
 
 def bucket(**overrides) -> BargeInBucket:
+    # the staged behaviour is what most of these tests exercise; instant mode has its own tests
+    overrides.setdefault("barge_in_instant", False)
     return BargeInBucket(EndpointConfig(**overrides))
+
+
+def test_instant_mode_cuts_at_duck_chunks_and_never_ducks_or_releases():
+    b = bucket(barge_in_instant=True, duck_chunks=3, barge_in_chunks=10)
+    assert drive(b, "xxx") == [None, None, "cut"]
+    assert b.cuts == 1 and (b.hot, b.ducked) == (0, False)
+    # a short backchannel followed by silence: nothing to release, the cut already happened
+    assert drive(b, "." * 10) == [None] * 10
+    assert b.backchannels == 0
+
+
+def test_instant_mode_is_the_default():
+    assert EndpointConfig().barge_in_instant is True
+    assert BargeInBucket(EndpointConfig()).cut_at == EndpointConfig().duck_chunks
 
 
 def drive(b: BargeInBucket, pattern: str, can_duck: bool = True) -> list[str | None]:
