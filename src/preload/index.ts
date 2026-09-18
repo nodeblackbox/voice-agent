@@ -77,6 +77,7 @@ const api: VoiceAgentApi = {
   },
   context: { snapshot: () => invoke(IPC.contextSnapshot) },
   shell: { open: (url) => invoke(IPC.openExternal, url) },
+  log: { write: (level, scope, msg) => ipcRenderer.send(IPC.logWrite, level, scope, msg) },
   onEvent: (handler) => {
     const listener = (_e: Electron.IpcRendererEvent, event: Parameters<typeof handler>[0]) => handler(event)
     ipcRenderer.on(IPC.event, listener)

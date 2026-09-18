@@ -1,4 +1,5 @@
 import { CAPTURE_PROCESSOR_NAME, captureProcessorUrl } from './capture-processor'
+import { rlog } from '../lib/rlog'
 
 let ctx: AudioContext | null = null
 let stream: MediaStream | null = null
@@ -50,7 +51,8 @@ export const capture = {
       let c: AudioContext
       try {
         c = new AudioContext({ sampleRate: 16000, latencyHint: 'interactive' })
-      } catch {
+      } catch (e) {
+        rlog('info', 'capture', `16 kHz AudioContext refused (${e instanceof Error ? e.message : String(e)}); resampling in the worklet`)
         c = new AudioContext({ latencyHint: 'interactive' })
       }
       try {
@@ -68,6 +70,9 @@ export const capture = {
       ctx = c
       stream = media
       node = worklet
+      const track = media.getAudioTracks()[0]
+      const s = track?.getSettings() ?? {}
+      rlog('info', 'capture', `mic open: ${track?.label ?? 'unknown'} rate=${c.sampleRate} aec=${String(s.echoCancellation)} ns=${String(s.noiseSuppression)} agc=${String(s.autoGainControl)}`)
     })()
     try {
       await starting

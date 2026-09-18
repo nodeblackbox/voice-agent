@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import fields
 from pathlib import Path
 
 import pytest
@@ -41,11 +42,14 @@ def test_values_are_coerced_to_field_type():
 
 def test_defaults_match_protocol_md():
     doc = PROTOCOL.read_text(encoding="utf-8")
-    documented = {k: float(v) for k, v in re.findall(r"`(\w+)` \(([\d.]+)\)", doc)}
+    documented = {_snake(k): float(v) for k, v in re.findall(r"`(\w+)` \(([\d.]+)\)", doc)}
     cfg = EndpointConfig()
     assert documented, "PROTOCOL.md should list endpoint defaults as `name` (value)"
-    for camel, value in documented.items():
-        assert float(getattr(cfg, _snake(camel))) == value, camel
+    for name, value in documented.items():
+        assert float(getattr(cfg, name)) == value, name
+    # every tunable the sidecar accepts must be documented, not only the documented ones checked
+    undocumented = {f.name for f in fields(EndpointConfig)} - set(documented)
+    assert not undocumented, f"PROTOCOL.md is missing endpoint fields: {sorted(undocumented)}"
 
 
 @pytest.mark.parametrize("camel, snake", [("vadThreshold", "vad_threshold"), ("bargeInDecay", "barge_in_decay"), ("x", "x")])

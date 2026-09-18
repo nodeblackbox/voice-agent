@@ -3,10 +3,11 @@ import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { IPC } from '@shared/ipc'
 import type { AgentEvent, AudioChunk, ServiceStatus, Settings } from '@shared/types'
+import { earConfig } from '@shared/tuning'
 import { Agent } from '@core/agent'
 import { MemoryStore } from '@core/memory/store'
 import { findModel } from '@core/providers/models'
-import { initLog, log } from './services/log'
+import { initLog, log, logAt, trace, type LogLevel } from './services/log'
 import { SettingsService } from './services/settings'
 import { SidecarService } from './services/sidecar'
 import { SearxngService } from './services/searxng'
@@ -53,7 +54,7 @@ function createWindow(): BrowserWindow {
     }
   })
   w.webContents.on('console-message', (event) => {
-    if (event.level === 'error' || event.level === 'warning') log('renderer', `${event.level}: ${event.message} (${event.sourceId}:${event.lineNumber})`)
+    if (event.level === 'error' || event.level === 'warning') logAt(event.level === 'error' ? 'error' : 'warn', 'renderer', `${event.message} (${event.sourceId}:${event.lineNumber})`)
   })
   w.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//.test(url)) void shell.openExternal(url)
@@ -64,9 +65,22 @@ function createWindow(): BrowserWindow {
   return w
 }
 
+// Leaf paths whose value changed between two settings objects, e.g. { 'endpoint.prerollMs': 1000 }.
+function changedPaths(a: unknown, b: unknown, prefix = '', out: Record<string, unknown> = {}): Record<string, unknown> {
+  const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
+  if (isObj(a) && isObj(b)) {
+    for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) changedPaths(a[k], b[k], prefix ? `${prefix}.${k}` : k, out)
+  } else if (JSON.stringify(a) !== JSON.stringify(b)) out[prefix] = b
+  return out
+}
+
 app.whenReady().then(async () => {
   const userData = app.getPath('userData')
-  initLog(userData)
+  const settings = new SettingsService(userData, join(projectRoot, '.env'))
+  initLog(userData, {
+    level: () => settings.get().runtime.logLevel as LogLevel,
+    transcripts: () => settings.get().runtime.logTranscripts
+  })
   log('app', `starting (dev=${isDev}) root=${projectRoot} userData=${userData}`)
 
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
@@ -74,7 +88,6 @@ app.whenReady().then(async () => {
   })
   session.defaultSession.setPermissionCheckHandler((_wc, permission) => ['media', 'speaker-selection'].includes(permission))
 
-  const settings = new SettingsService(userData, join(projectRoot, '.env'))
   const store = new MemoryStore(join(userData, 'memory.sqlite'))
   for (const p of store.projects()) store.ensureScope(p.id, p.name)
 
@@ -92,9 +105,20 @@ app.whenReady().then(async () => {
   const sidecar = new SidecarService({
     projectRoot,
     stt: () => settings.get().stt,
-    endpoint: () => settings.get().endpoint,
+    earConfig: () => earConfig(settings.get()),
+    idleShutdownMs: () => settings.get().runtime.idleShutdownMs,
     onStatus,
+    trace,
     onEvent: (evt) => {
+      if (evt.type !== 'level' && evt.type !== 'pong') {
+        const { type, ...data } = evt as Record<string, unknown> & { type: string }
+        // the sidecar's `t` is its own perf-counter clock; keep it, but never under the trace's timestamp key
+        if ('t' in data) {
+          data.earT = data.t
+          delete data.t
+        }
+        trace({ ...data, ev: `ear.${type}`, sid: agent.currentSessionId })
+      }
       switch (evt.type) {
         case 'speech_start':
           agent.onSpeechStart()
@@ -106,7 +130,7 @@ app.whenReady().then(async () => {
           agent.onSpeechEnd()
           break
         case 'final':
-          agent.onFinal(evt.text, evt.asrMs)
+          agent.onFinal(evt.text, evt.asrMs, { afterCut: evt.afterCut === true, durationMs: evt.durationMs })
           break
         case 'bargein':
           agent.onBargeIn(evt.stage)
@@ -115,7 +139,7 @@ app.whenReady().then(async () => {
           emit({ type: 'level', p: evt.p })
           break
         case 'error':
-          if (!evt.fatal) log('ear', `error: ${evt.message}`)
+          if (!evt.fatal) logAt('warn', 'ear', `error: ${evt.message}`)
           break
         default:
           break
@@ -144,7 +168,8 @@ app.whenReady().then(async () => {
     emit,
     emitAudio: (chunk: AudioChunk) => send(IPC.audioChunk, chunk),
     cancelAudio: (turnId) => send(IPC.audioCancel, turnId),
-    log: (m) => log('agent', m)
+    log: (m) => log('agent', m),
+    trace
   })
 
   const services = (): ServiceStatus[] => {
@@ -159,7 +184,11 @@ app.whenReady().then(async () => {
     ]
   }
 
+  let previousSettings: Settings = settings.get()
   settings.onChange((s: Settings) => {
+    const changed = changedPaths(previousSettings, s)
+    previousSettings = s
+    if (Object.keys(changed).length) trace({ ev: 'settings.changed', sid: agent.currentSessionId, changed })
     sidecar.applyConfig()
     emit({ type: 'settings-changed', settings: s })
     emit({ type: 'context', snapshot: agent.snapshot() })

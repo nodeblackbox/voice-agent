@@ -13,9 +13,10 @@ It is the only Python in the project; everything else is TypeScript.
 .\install.ps1        # creates .\.venv with the pinned CUDA 12.4 stack (needs uv)
 ```
 
-Dev shortcut: the old terminal agent's environment at `D:\Downloads\voiceAgent\.venv` already has every
-dependency at the same pins, so pointing the app's *Python path* setting at
-`D:\Downloads\voiceAgent\.venv\Scripts\python.exe` works without installing anything.
+The app looks for Python in this order: Settings → Voice input → *Python path* (`stt.pythonPath`), the
+`VA_PYTHON` environment variable, `sidecar\.venv\Scripts\python.exe`, then `python` on PATH. Any venv
+with the same pins works (for example an existing one from another project); point the setting at its
+`python.exe` instead of installing twice.
 
 Models: Parakeet is fetched from Hugging Face on first start (honours `HF_HOME`); `install.ps1` downloads the
 Smart Turn ONNX file (`pipecat-ai/smart-turn-v3`, `smart-turn-v3.2-cpu.onnx`) into `..\models\`.
@@ -24,14 +25,14 @@ Smart Turn ONNX file (`pipecat-ai/smart-turn-v3`, `smart-turn-v3.2-cpu.onnx`) in
 
 ```powershell
 cd sidecar
-..\..\voiceAgent\.venv\Scripts\python.exe -m ear --port 0        # prints "EAR_PORT <port>" on stdout
+.\.venv\Scripts\python.exe -m ear --port 0        # prints "EAR_PORT <port>" on stdout
 python -m ear --stt-model nemo-parakeet-tdt-0.6b-v3 --stt-device cpu
 ```
 
 Replay a recording against it (real-time by default, `--fast` to skip the pacing):
 
 ```powershell
-python tests\replay_client.py --port <port> D:\Downloads\voiceAgent\audio\handy-1787878656.wav
+python tests\replay_client.py --port <port> path\to\utterance.wav
 python tests\replay_client.py --port <port> first.wav --bargein second.wav
 ```
 
@@ -41,12 +42,17 @@ Exit codes: `3` = CUDA requested but not available (use `--stt-device cpu`), `1`
 
 The unit tests need only `numpy`, `websockets` and `pytest` (`requirements-dev.txt`): every model is
 injected as a fake, and the heavy imports (torch, onnxruntime, onnx-asr) are lazy, so CI runs them
-without a GPU. From the repo root, with either the sidecar venv or the old project's venv:
+without a GPU. Run them from this directory (the `tests` package name can collide with a `tests`
+package installed in the user site-packages when run from elsewhere):
 
 ```powershell
-python -m pytest sidecar/tests -q
-EAR_INTEGRATION=1 python -m pytest sidecar/tests -q -m integration   # real models + wav replay
+cd sidecar
+python -m pytest tests -q
+$env:EAR_INTEGRATION=1; python -m pytest tests -q -m integration   # real models + wav replay
 ```
+
+`test_vad.py` needs `onnxruntime` and `silero-vad` installed and is skipped otherwise; it asserts the
+VAD runs without importing torch.
 
 What is covered: endpoint tiers and cadence (`test_endpoint.py`), the barge-in leaky bucket
 (`test_bargein.py`), config parsing against PROTOCOL.md (`test_config.py`), Smart Turn feature

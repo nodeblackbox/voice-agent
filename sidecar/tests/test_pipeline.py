@@ -35,8 +35,9 @@ def test_full_utterance_emits_start_partial_end_final(make_pipeline, events):
     assert end["reason"] == "done" and end["turnP"] == 0.95 and 250 <= end["silenceMs"] <= 300
     assert p.pending_decodes() == 1
     assert p.decode_next()
-    final = events[-1]
-    assert final["type"] == "final" and final["text"] == "testing one two" and final["reason"] == "done"
+    final = next(e for e in events if e["type"] == "final")
+    assert final["text"] == "testing one two" and final["reason"] == "done"
+    assert events[-1]["type"] == "stats"
     # utterance = preroll + speech + trailing silence
     assert final["durationMs"] >= speech_frames * FRAME_MS
     assert p._state == "listening"
@@ -47,8 +48,9 @@ def test_partials_are_emitted_on_the_timer(make_pipeline, events):
     p = make_pipeline(vad=FakeVad([0.9] * n, default=0.0), asr=FakeAsr("partial text"))
     speak(p, n)
     partials = [e for e in events if e["type"] == "partial"]
-    # 700 ms cadence over ~1.9 s of audio (plus preroll) => two partials
-    assert len(partials) == 2
+    # one partial per `partial_every_ms` of utterance audio (600 ms default over ~1.9 s => three)
+    expected = int(n * FRAME_MS // p.cfg.partial_every_ms)
+    assert len(partials) == expected
     assert partials[0]["text"] == "partial text"
 
 
@@ -172,6 +174,123 @@ def test_asr_failure_becomes_a_non_fatal_error_and_empty_final(make_pipeline, ev
     speak(p, 20 + 12)
     p.decode_next()
     ks = kinds(events)
-    assert "error" in ks and ks[-1] == "final"
-    assert events[-1]["text"] == ""
+    assert "error" in ks and "final" in ks
+    final = next(e for e in events if e["type"] == "final")
+    assert final["text"] == ""
     assert next(e for e in events if e["type"] == "error")["fatal"] is False
+
+
+# ---------------------------------------------------------------- ported from the old agent's fixes_test.py
+def bargein_stages(events) -> list[str]:
+    return [e["stage"] for e in events if e["type"] == "bargein"]
+
+
+def test_old_hard_reset_logic_would_have_failed_on_fluttery_speech():
+    # sanity check for the leaky bucket: with a dip every 6th frame the longest run is 5 < 10, so a
+    # reset-on-any-miss counter never cuts, while the bucket does (see next test)
+    scores = [0.4 if i % 6 == 5 else 0.85 for i in range(40)]
+    hot, cut = 0, False
+    for p in scores:
+        if p >= 0.75:
+            hot += 1
+            if hot >= 10:
+                cut = True
+                break
+        else:
+            hot = 0
+    assert not cut
+
+
+def test_sustained_speech_with_flutter_still_cuts(make_pipeline, events):
+    scores = [0.4 if i % 6 == 5 else 0.85 for i in range(40)]
+    p = make_pipeline(vad=FakeVad(scores, default=0.0))
+    p.set_agent_speaking(True)
+    speak(p, 40)
+    assert "cut" in bargein_stages(events)
+
+
+def test_one_utterance_with_micro_pauses_cuts_without_release_spam(make_pipeline, events):
+    # 67 % duty cycle speech: escalates to a real interrupt and never flickers "release" on the way
+    scores = ([0.85] * 4 + [0.3] * 2) * 5
+    p = make_pipeline(vad=FakeVad(scores, default=0.0))
+    p.set_agent_speaking(True)
+    speak(p, len(scores))
+    stages = bargein_stages(events)
+    assert "cut" in stages
+    assert stages.count("release") == 0
+
+
+def test_three_separate_bursts_are_three_backchannels(make_pipeline, events):
+    scores = ([0.85] * 4 + [0.1] * 10) * 3
+    p = make_pipeline(vad=FakeVad(scores, default=0.0))
+    p.set_agent_speaking(True)
+    speak(p, len(scores))
+    stages = bargein_stages(events)
+    assert "cut" not in stages
+    assert stages.count("duck") == 3 and stages.count("release") == 3
+    assert p._bucket.backchannels == 3
+
+
+def test_cut_seeds_the_utterance_with_the_speech_that_triggered_it(make_pipeline, events):
+    p = make_pipeline(vad=FakeVad(default=0.9))
+    p.set_agent_speaking(True)
+    speak(p, 10)  # exactly barge_in_chunks frames of speech -> cut
+    cut = next(e for e in events if e["type"] == "bargein" and e["stage"] == "cut")
+    assert p._state == "user_speaking"
+    # the frames that built the credit are already in the utterance, not lost
+    assert len(p._utt) * FRAME_MS >= p.cfg.barge_in_chunks * FRAME_MS
+    assert cut["prerollMs"] >= p.cfg.barge_in_chunks * FRAME_MS
+    assert p._after_cut
+
+
+def test_preroll_default_covers_the_cut_window():
+    cfg = EndpointConfig()
+    assert cfg.preroll_ms > cfg.barge_in_chunks * FRAME_MS
+
+
+def test_speech_end_carries_the_smart_turn_checks_and_final_carries_after_cut(make_pipeline, events):
+    p = make_pipeline(vad=FakeVad([0.9] * 20, default=0.0), turn=FakeTurn(0.95))
+    speak(p, 20 + 12)
+    end = next(e for e in events if e["type"] == "speech_end")
+    assert end["checks"] and end["checks"][-1]["p"] == 0.95 and end["checks"][-1]["heldOnFiller"] is False
+    assert end["afterCut"] is False and end["speechMs"] >= 500
+    p.decode_next()
+    final = next(e for e in events if e["type"] == "final")
+    assert final["afterCut"] is False and "asrRtf" in final
+
+
+def test_stats_are_emitted_after_each_final(make_pipeline, events):
+    p = make_pipeline(vad=FakeVad([0.9] * 20, default=0.0))
+    speak(p, 20 + 12)
+    p.decode_next()
+    stats = [e for e in events if e["type"] == "stats"]
+    assert len(stats) == 1
+    assert stats[0] == {"type": "stats", "turns": 1, "turnChecks": 1, "turnCostP50Ms": stats[0]["turnCostP50Ms"],
+                        "heldOnFiller": 0, "backchannels": 0, "cuts": 0, "cutsEmptyFinal": 0}
+    assert stats[0]["turnCostP50Ms"] is not None
+
+
+def test_empty_final_after_a_cut_counts_as_a_self_cut_suspect(make_pipeline, events):
+    p = make_pipeline(vad=FakeVad([0.9] * 20, default=0.0), asr=FakeAsr(""))
+    p.set_agent_speaking(True)
+    speak(p, 20 + 12)
+    p.decode_next()
+    final = next(e for e in events if e["type"] == "final")
+    assert final["afterCut"] is True and final["text"] == ""
+    assert events[-1]["type"] == "stats" and events[-1]["cutsEmptyFinal"] == 1 and events[-1]["cuts"] == 1
+
+
+def test_a_persistent_frame_fault_is_rate_limited(make_pipeline, events):
+    p = make_pipeline()
+
+    def explode(chunk):
+        raise RuntimeError("bad frame")
+
+    p.process_frame = explode  # type: ignore[method-assign]
+    for _ in range(100):
+        p.feed(b"\x00\x00" * CHUNK)
+    p._in_q.put(None)
+    p._frame_loop()
+    errors = [e for e in events if e["type"] == "error"]
+    assert len(errors) == 3
+    assert all("bad frame" in e["message"] for e in errors)

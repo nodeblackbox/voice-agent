@@ -1,4 +1,29 @@
+import type { Readable } from 'node:stream'
 import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts'
+import { DEFAULT_TUNING } from '@shared/tuning'
+
+// Monkey-patch MsEdgeTTS to fix race condition where audio data arrives before stream is initialized
+const originalPushAudioData = (MsEdgeTTS.prototype as any)._pushAudioData
+if (originalPushAudioData) {
+  (MsEdgeTTS.prototype as any)._pushAudioData = function (data: any, requestId: string) {
+    // Check if stream exists before trying to push data
+    if (this._streams && this._streams[requestId] && this._streams[requestId].audio) {
+      originalPushAudioData.call(this, data, requestId)
+    }
+    // Silently ignore if stream doesn't exist (race condition or already cleaned up)
+  }
+}
+
+const originalPushMetadata = (MsEdgeTTS.prototype as any)._pushMetadata
+if (originalPushMetadata) {
+  (MsEdgeTTS.prototype as any)._pushMetadata = function (data: any, requestId: string) {
+    // Check if stream exists before trying to push metadata
+    if (this._streams && this._streams[requestId] && this._streams[requestId].metadata) {
+      originalPushMetadata.call(this, data, requestId)
+    }
+    // Silently ignore if stream doesn't exist (race condition or already cleaned up)
+  }
+}
 
 export interface TtsRequest {
   text: string
@@ -54,9 +79,13 @@ export class EdgeTtsEngine implements TtsEngine {
   private waiters: Array<(w: Worker) => void> = []
 
   constructor(
-    private readonly max = 3,
-    private readonly timeoutMs = 12_000
+    private readonly max: number = DEFAULT_TUNING.speech.ttsPoolSize,
+    private readonly timeoutMs: number | (() => number) = DEFAULT_TUNING.speech.ttsTimeoutMs
   ) {}
+
+  private get timeout(): number {
+    return typeof this.timeoutMs === 'function' ? this.timeoutMs() : this.timeoutMs
+  }
 
   private acquire(): Promise<Worker> {
     const w = this.idle.pop()
@@ -87,10 +116,21 @@ export class EdgeTtsEngine implements TtsEngine {
       return await new Promise<Buffer>((resolve, reject) => {
         let settled = false
         const chunks: Buffer[] = []
-        const { audioStream } = w.tts.toStream(escapeXml(req.text), {
-          rate: req.rate,
-          pitch: `${req.pitch >= 0 ? '+' : ''}${Math.round(req.pitch)}Hz`
-        })
+        let audioStream: Readable | null = null
+
+        try {
+          const result = w.tts.toStream(escapeXml(req.text), {
+            rate: req.rate,
+            pitch: `${req.pitch >= 0 ? '+' : ''}${Math.round(req.pitch)}Hz`
+          })
+          audioStream = result.audioStream
+        } catch (e) {
+          // Handle race condition or initialization errors in msedge-tts
+          healthy = false
+          reject(e instanceof Error ? e : new Error(String(e)))
+          return
+        }
+
         const finish = (err: Error | null): void => {
           if (settled) return
           settled = true
@@ -98,7 +138,7 @@ export class EdgeTtsEngine implements TtsEngine {
           signal.removeEventListener('abort', onAbort)
           if (err) {
             healthy = false
-            audioStream.destroy()
+            audioStream?.destroy()
             reject(err)
             return
           }
@@ -109,7 +149,7 @@ export class EdgeTtsEngine implements TtsEngine {
           } else resolve(buf)
         }
         const onAbort = (): void => finish(abortError())
-        const timer = setTimeout(() => finish(new Error('Edge TTS timed out')), this.timeoutMs)
+        const timer = setTimeout(() => finish(new Error('Edge TTS timed out')), this.timeout)
         signal.addEventListener('abort', onAbort, { once: true })
         audioStream.on('data', (d: Buffer) => chunks.push(d))
         audioStream.on('error', (e: Error) => finish(e))

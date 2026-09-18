@@ -39,7 +39,12 @@ not exit.
 `vadThreshold` (0.5), `minSpeechMs` (250), `minSilenceMs` (250), `maxSilenceMs` (1200),
 `checkEveryMs` (200), `turnThreshold` (0.7), `turnHighThreshold` (0.9), `bargeInThreshold` (0.75),
 `bargeInChunks` (10), `duckChunks` (3), `duckGain` (0.25), `bargeInDecay` (1),
-`bargeInReleaseChunks` (6), `partialEveryMs` (700), `prerollMs` (300).
+`bargeInReleaseChunks` (6), `partialEveryMs` (600), `prerollMs` (1000), `maxUtteranceMs` (30000),
+`levelEveryFrames` (3).
+
+`prerollMs` must exceed `bargeInChunks` x 32 ms: after a barge-in `cut` the new utterance is seeded
+from the preroll buffer, and the cut only fires once that much speech has already gone by. The
+app derives every value here from `src/shared/tuning.ts`; see `docs/TUNING.md`.
 
 ## Server -> client messages
 

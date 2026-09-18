@@ -4,6 +4,7 @@ import { MockLanguageModelV4, simulateReadableStream } from 'ai/test'
 import type { LanguageModelV4StreamPart } from '@ai-sdk/provider'
 import { z } from 'zod'
 import type { AudioChunk, ModelInfo } from '@shared/types'
+import { DEFAULT_TUNING } from '@shared/tuning'
 import { TurnRunner, type RunnerDeps } from './runner'
 import { Speaker } from '../speech/speaker'
 import type { ModelFactory } from '../providers/factory'
@@ -75,6 +76,7 @@ function harness(models: Record<string, MockLanguageModelV4>, over: Partial<Runn
     maxSteps: 4,
     format: 'plain',
     speaker,
+    speech: DEFAULT_TUNING.speech,
     fillerEnabled: true,
     firstTokenTimeoutMs: 2000,
     stallTimeoutMs: 2000,

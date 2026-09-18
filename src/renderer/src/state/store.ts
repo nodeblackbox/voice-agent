@@ -20,6 +20,7 @@ import type {
 import { playback } from '../audio/playback'
 import { cue } from '../audio/cue'
 import { listDevices, pickDefaults } from '../audio/devices'
+import { rlog } from '../lib/rlog'
 
 export type View = 'chat' | 'prompts' | 'skills' | 'memory' | 'projects' | 'settings'
 
@@ -191,6 +192,7 @@ export const useStore = create<Store>((set, get) => ({
           break
         case 'settings-changed':
           set({ settings: e.settings })
+          playback.configure(e.settings.playback)
           void playback.setOutput(e.settings.audio.outputDeviceId)
           break
         case 'toast':
@@ -241,14 +243,15 @@ export const useStore = create<Store>((set, get) => ({
       context,
       ready: true
     })
+    playback.configure(settings.playback)
     void playback.setOutput(settings.audio.outputDeviceId)
 
     try {
       const devices = await listDevices()
       const patch = pickDefaults(settings.audio, devices)
       if (patch) await get().updateSettings({ audio: { ...settings.audio, ...patch } })
-    } catch {
-      // no device access yet; the settings page retries
+    } catch (e) {
+      rlog('info', 'devices', `no device access yet (${e instanceof Error ? e.message : String(e)}); the settings page retries`)
     }
   },
 
@@ -265,6 +268,7 @@ export const useStore = create<Store>((set, get) => ({
   async updateSettings(patch) {
     const settings = await window.api.settings.set(patch)
     set({ settings })
+    if (patch.playback) playback.configure(settings.playback)
     if (patch.audio) void playback.setOutput(settings.audio.outputDeviceId)
   },
 

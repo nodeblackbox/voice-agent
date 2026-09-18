@@ -1,7 +1,11 @@
 // Shared contracts between main, preload, renderer and the agent core.
 // Everything crossing an IPC boundary is defined here.
 
+import type { TuningValues } from './tuning'
+
 export type Provider = 'anthropic' | 'groq' | 'google' | 'xai'
+
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
 
 export interface ModelInfo {
   id: string
@@ -167,22 +171,13 @@ export interface AudioDeviceSettings {
   outputLabel?: string
 }
 
-export interface EndpointSettings {
-  vadThreshold: number
-  minSpeechMs: number
-  minSilenceMs: number
-  maxSilenceMs: number
-  checkEveryMs: number
-  turnThreshold: number
-  turnHighThreshold: number
-  bargeInThreshold: number
-  bargeInChunks: number
-  duckChunks: number
-  duckGain: number
-  bargeInDecay: number
-  bargeInReleaseChunks: number
-  partialEveryMs: number
-}
+// Behavioural numbers are defined once in ./tuning; these aliases keep call sites readable.
+export type EndpointSettings = TuningValues['endpoint']
+export type BrainSettings = TuningValues['brain']
+export type SpeechSettings = TuningValues['speech']
+export type PlaybackSettings = TuningValues['playback']
+export type MemorySettings = TuningValues['memory']
+export type RuntimeSettings = TuningValues['runtime']
 
 export interface SttSettings {
   model: string
@@ -221,6 +216,11 @@ export interface Settings {
   voice: VoiceSettings
   audio: AudioDeviceSettings
   endpoint: EndpointSettings
+  brain: BrainSettings
+  speech: SpeechSettings
+  playback: PlaybackSettings
+  memory: MemorySettings
+  runtime: RuntimeSettings
   stt: SttSettings
   behaviour: BehaviourSettings
   location: LocationSettings

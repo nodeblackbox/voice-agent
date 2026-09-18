@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { safeStorage } from 'electron'
 import type { KeyStatus, PromptStyle, Provider, Settings, Skill } from '@shared/types'
+import { defaultTuning } from '@shared/tuning'
 import { DEFAULT_FALLBACK_MODEL_ID, DEFAULT_MODEL_ID } from '@core/providers/models'
 import { DEFAULT_STYLE_ID } from '@core/prompts/styles'
 import { mergeSkills } from '@core/prompts/skills'
@@ -18,22 +19,7 @@ export const DEFAULT_SETTINGS: Settings = {
   userName: 'the user',
   voice: { engine: 'edge', voice: 'en-US-AvaNeural', rate: 1.0, pitch: 0 },
   audio: {},
-  endpoint: {
-    vadThreshold: 0.5,
-    minSpeechMs: 250,
-    minSilenceMs: 250,
-    maxSilenceMs: 1200,
-    checkEveryMs: 200,
-    turnThreshold: 0.7,
-    turnHighThreshold: 0.9,
-    bargeInThreshold: 0.75,
-    bargeInChunks: 10,
-    duckChunks: 3,
-    duckGain: 0.25,
-    bargeInDecay: 1,
-    bargeInReleaseChunks: 6,
-    partialEveryMs: 700
-  },
+  ...defaultTuning(),
   stt: { model: 'nemo-parakeet-tdt-0.6b-v2', device: 'hybrid', pythonPath: '' },
   behaviour: { confirmBeforeSave: false, fillerBeforeTools: true, loadingSound: true, speakTypedReplies: true, listenOnLaunch: false },
   location: { mode: 'manual', manual: '' },

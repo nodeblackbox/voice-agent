@@ -19,10 +19,15 @@ class BargeInBucket:
         self.hot = 0
         self.miss_run = 0
         self.ducked = False
+        self.backchannels = 0  # lifetime: ducks that were released without a cut
+        self.cuts = 0          # lifetime: real interruptions
 
     def reset(self) -> None:
         self.hot = self.miss_run = 0
         self.ducked = False
+
+    def reset_counters(self) -> None:
+        self.backchannels = self.cuts = 0
 
     def update(self, hit: bool, can_duck: bool = True) -> Stage | None:
         cfg = self.cfg
@@ -31,6 +36,7 @@ class BargeInBucket:
             self.hot = min(self.hot + 1, cfg.barge_in_chunks + cfg.duck_chunks)
             if self.hot >= cfg.barge_in_chunks:
                 self.reset()
+                self.cuts += 1
                 return "cut"
             if self.hot >= cfg.duck_chunks and not self.ducked and can_duck:
                 self.ducked = True
@@ -43,5 +49,6 @@ class BargeInBucket:
         self.miss_run += 1
         if self.miss_run >= cfg.barge_in_release_chunks:
             self.reset()
+            self.backchannels += 1
             return "release"
         return None

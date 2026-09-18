@@ -20,6 +20,7 @@ from . import CHUNK, SR
 from .bargein import BargeInBucket
 from .config import EndpointConfig, SttConfig
 from .endpoint import Endpointer
+from .ratelimit import RateLimiter
 
 log = logging.getLogger("ear.pipeline")
 
@@ -28,8 +29,6 @@ Spawn = Callable[[Callable[..., None], tuple], None]
 
 LISTENING = "listening"
 USER_SPEAKING = "user_speaking"
-
-LEVEL_EVERY_FRAMES = 3  # ~96 ms
 
 
 class Vad(Protocol):
@@ -93,8 +92,15 @@ class Pipeline:
         self._t_on = 0.0
         self._t_last = 0.0
         self._announced = False
+        self._after_cut = False
         self._last_partial_len = 0
         self._bucket = BargeInBucket(self.cfg)
+        self._faults = RateLimiter(window_s=10.0, burst=3)
+        self._turns = 0
+        self._cuts_empty_final = 0
+        self._last_stats_t = 0.0
+        self._stats_dirty = False
+        self.stats_every_s = 30.0
 
         if start_threads:
             threading.Thread(target=self._frame_loop, name="ear-frames", daemon=True).start()
@@ -108,6 +114,7 @@ class Pipeline:
 
             self._status("loading_vad")
             self.vad = SileroVad()
+            log.info("vad: silero on %s (%s)", self.vad.backend, self.vad.path)
         if self.turn is None:
             from .turn import SmartTurn
 
@@ -198,10 +205,20 @@ class Pipeline:
                 self._pending = self._pending[CHUNK:]
                 try:
                     self.process_frame(chunk)
-                except Exception:  # noqa: BLE001
-                    log.exception("frame processing failed; resetting")
-                    self.emit({"type": "error", "message": "frame processing failed", "fatal": False})
+                except Exception as exc:  # noqa: BLE001
+                    self._fault("frame processing failed", exc)
                     self._do_reset()
+
+    def _fault(self, what: str, exc: BaseException) -> None:
+        """Log and report a recurring fault without flooding: a persistent per-frame error would
+        otherwise write ~31 tracebacks and websocket messages per second."""
+        ok, expired = self._faults.admit(what)
+        for key, n in expired:
+            log.warning("%s: repeated %d more times in the last %.0f s", key, n, self._faults.window_s)
+            self.emit({"type": "error", "message": f"{key} (repeated x{n})", "fatal": False})
+        if ok:
+            log.exception("%s: %s", what, exc)
+            self.emit({"type": "error", "message": f"{what}: {exc}", "fatal": False})
 
     def _do_reset(self) -> None:
         self._pending = np.zeros(0, dtype=np.float32)
@@ -222,8 +239,10 @@ class Pipeline:
         self._frame_n += 1
         now = self._t_audio
         p = self.vad(chunk)
-        if self._frame_n % LEVEL_EVERY_FRAMES == 0:
+        if self._frame_n % max(1, cfg.level_every_frames) == 0:
             self.emit({"type": "level", "p": round(p, 3)})
+        if self._stats_dirty and now - self._last_stats_t >= self.stats_every_s:
+            self._emit_stats()
 
         if self._state == LISTENING:
             self._preroll.append(chunk)
@@ -237,9 +256,10 @@ class Pipeline:
             stage = self._bucket.update(p >= thr, can_duck=self.agent_speaking)
             if stage == "cut":
                 self.agent_speaking = self.agent_thinking = False
-                self.emit({"type": "bargein", "stage": "cut"})
+                self.emit({"type": "bargein", "stage": "cut", "prerollMs": round(len(self._preroll) * CHUNK / SR * 1e3)})
                 self._open_utterance(now, announce=True)
             elif stage is not None:
+                self._stats_dirty = True
                 self.emit({"type": "bargein", "stage": stage})
             return
 
@@ -268,11 +288,13 @@ class Pipeline:
         audio = np.concatenate(self._utt)
         if self._announced:
             turn_p = self.ep.last_p
+            speech_ms = (self._t_last - self._t_on) * 1e3
             self.emit({"type": "speech_end", "reason": decision, "silenceMs": round(sil_ms),
-                       "turnP": None if turn_p is None else round(turn_p, 3)})
-            log.debug("turn end: %s after %.0f ms silence (smart-turn %s)", decision, sil_ms,
-                      f"{turn_p:.2f}" if turn_p is not None else "n/a")
-            self._decode_q.put((audio, decision, turn_p, self._clock()))
+                       "turnP": None if turn_p is None else round(turn_p, 3), "speechMs": round(speech_ms),
+                       "checks": list(self.ep.trace), "afterCut": self._after_cut})
+            log.info("turn_end reason=%s silence_ms=%.0f turn_p=%s speech_ms=%.0f checks=%d after_cut=%s", decision, sil_ms,
+                     f"{turn_p:.2f}" if turn_p is not None else "n/a", speech_ms, len(self.ep.trace), self._after_cut)
+            self._decode_q.put((audio, decision, turn_p, self._clock(), self._after_cut))
         self._close_utterance()
 
     def _open_utterance(self, now: float, announce: bool = False) -> None:
@@ -285,8 +307,19 @@ class Pipeline:
         self._last_partial_text = ""
         self._bucket.reset()
         self._announced = announce
+        self._after_cut = announce
         if announce:
             self.emit({"type": "speech_start", "t": self._clock()})
+
+    def _emit_stats(self) -> None:
+        assert self.ep is not None
+        self._last_stats_t = self._t_audio
+        self._stats_dirty = False
+        p50 = self.ep.cost_p50_ms()
+        self.emit({"type": "stats", "turns": self._turns, "turnChecks": self.ep.checks,
+                   "turnCostP50Ms": None if p50 is None else round(p50, 1), "heldOnFiller": self.ep.held_on_filler,
+                   "backchannels": self._bucket.backchannels, "cuts": self._bucket.cuts,
+                   "cutsEmptyFinal": self._cuts_empty_final})
 
     def _close_utterance(self) -> None:
         assert self.vad is not None
@@ -311,8 +344,8 @@ class Pipeline:
             self._last_partial_text = text
             if self._state == USER_SPEAKING and text:
                 self.emit({"type": "partial", "text": text})
-        except Exception:  # noqa: BLE001
-            log.exception("partial decode failed")
+        except Exception as exc:  # noqa: BLE001
+            self._fault("partial decode failed", exc)
         finally:
             self._partial_busy.clear()
 
@@ -337,18 +370,23 @@ class Pipeline:
         return True
 
     def decode_one(self, item: tuple) -> None:
-        audio, reason, turn_p, t_end = item
+        audio, reason, turn_p, t_end, after_cut = item
         assert self.asr is not None
         t0 = self._clock()
         try:
             with self._asr_lock:
                 text = self.asr.recognize(audio)
         except Exception as exc:  # noqa: BLE001
-            log.exception("final decode failed")
-            self.emit({"type": "error", "message": f"ASR failed: {exc}", "fatal": False})
+            self._fault("final decode failed", exc)
             text = ""
         asr_ms = (self._clock() - t0) * 1e3
-        self.emit({"type": "final", "text": text, "durationMs": round(len(audio) / SR * 1e3),
-                   "asrMs": round(asr_ms), "turnP": None if turn_p is None else round(turn_p, 3),
-                   "reason": reason, "queuedMs": round((t0 - t_end) * 1e3)})
-        log.info("final (%.0f ms asr, %.1f s audio): %s", asr_ms, len(audio) / SR, text or "<empty>")
+        duration_ms = len(audio) / SR * 1e3
+        self._turns += 1
+        if after_cut and not text.strip():
+            self._cuts_empty_final += 1
+        self.emit({"type": "final", "text": text, "durationMs": round(duration_ms),
+                   "asrMs": round(asr_ms), "asrRtf": round(asr_ms / duration_ms, 3) if duration_ms else None,
+                   "turnP": None if turn_p is None else round(turn_p, 3),
+                   "reason": reason, "queuedMs": round((t0 - t_end) * 1e3), "afterCut": after_cut})
+        log.info("final asr_ms=%.0f audio_s=%.1f after_cut=%s: %s", asr_ms, len(audio) / SR, after_cut, text or "<empty>")
+        self._emit_stats()

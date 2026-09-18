@@ -1,7 +1,7 @@
 import { ipcMain, shell, type BrowserWindow } from 'electron'
 import { generateText } from 'ai'
 import { IPC } from '@shared/ipc'
-import type { McpServerConfig, MemoryEntry, Project, PromptStyle, Provider, ServiceStatus, Settings, Skill, StyleDraft } from '@shared/types'
+import type { LogLevel, McpServerConfig, MemoryEntry, Project, PromptStyle, Provider, ServiceStatus, Settings, Skill, StyleDraft } from '@shared/types'
 import type { Agent } from '@core/agent'
 import { MODELS, findModel } from '@core/providers/models'
 import { BUILTIN_STYLES } from '@core/prompts/styles'
@@ -11,7 +11,9 @@ import type { SettingsService } from '../services/settings'
 import type { SidecarService } from '../services/sidecar'
 import type { SearxngService } from '../services/searxng'
 import type { McpService } from '../services/mcp'
-import { log } from '../services/log'
+import { log, logAt } from '../services/log'
+
+const LEVELS = new Set<LogLevel>(['debug', 'info', 'warn', 'error'])
 
 export interface IpcDeps {
   win: () => BrowserWindow | null
@@ -67,6 +69,9 @@ export function registerIpc(d: IpcDeps): void {
     d.agent.setMic(false)
   })
   ipcMain.on(IPC.audioFrame, (_e, pcm: ArrayBuffer) => d.sidecar.sendFrame(pcm))
+  ipcMain.on(IPC.logWrite, (_e, level: LogLevel, scope: string, msg: string) => {
+    if (LEVELS.has(level) && typeof msg === 'string') logAt(level, `renderer:${String(scope).slice(0, 32)}`, msg.slice(0, 2000))
+  })
 
   h(IPC.speakMessage, (_e, id: string) => d.agent.speakMessage(id))
   h(IPC.speakStop, () => d.agent.stopReading())
@@ -74,7 +79,7 @@ export function registerIpc(d: IpcDeps): void {
   h(IPC.voicesList, () => d.agent.voices())
 
   ipcMain.on(IPC.playbackStarted, (_e, turnId: string, seq: number) => d.agent.onPlaybackStarted(turnId, seq))
-  ipcMain.on(IPC.playbackFinished, () => d.agent.onPlaybackFinished())
+  ipcMain.on(IPC.playbackFinished, (_e, turnId: string, seq: number) => d.agent.onPlaybackFinished(turnId, seq))
   ipcMain.on(IPC.playbackDrained, (_e, turnId: string) => d.agent.onPlaybackDrained(turnId))
 
   const allStyles = (): PromptStyle[] => [...BUILTIN_STYLES, ...d.settings.styles()]

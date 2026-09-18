@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite'
 import type { ChatMessage, MemoryEntry, MemoryKind, MemoryScope, Project, Session } from '@shared/types'
+import { DEFAULT_TUNING } from '@shared/tuning'
 
 export const GLOBAL_SCOPE = 'global'
 
@@ -194,25 +195,28 @@ export class MemoryStore {
     this.db.prepare('DELETE FROM entries WHERE id = ?').run(id)
   }
 
-  profile(scopeIds: string[]): MemoryEntry[] {
+  profile(scopeIds: string[], limit: number = DEFAULT_TUNING.memory.profileLimit): MemoryEntry[] {
+    if (limit <= 0) return []
     const marks = scopeIds.map(() => '?').join(',')
     const rows = this.db
-      .prepare(`SELECT * FROM entries WHERE kind = 'profile' AND scope_id IN (${marks}) ORDER BY updated_at DESC LIMIT 40`)
-      .all(...scopeIds) as EntryRow[]
+      .prepare(`SELECT * FROM entries WHERE kind = 'profile' AND scope_id IN (${marks}) ORDER BY updated_at DESC LIMIT ?`)
+      .all(...scopeIds, limit) as EntryRow[]
     return rows.map(toEntry)
   }
 
-  relevant(text: string, scopeIds: string[], limit = 6): MemoryEntry[] {
+  /** BM25 hits for `text`. `minScore` is a floor on |bm25| (FTS5 ranks are negative, lower = better); 0 disables it. */
+  relevant(text: string, scopeIds: string[], limit: number = DEFAULT_TUNING.memory.relevantLimit, minScore = 0): MemoryEntry[] {
     const q = ftsQuery(text)
-    if (!q) return []
+    if (!q || limit <= 0) return []
     const marks = scopeIds.map(() => '?').join(',')
     const rows = this.db
       .prepare(
         `SELECT e.*, bm25(entries_fts) AS rank FROM entries_fts f JOIN entries e ON e.id = f.rowid
          WHERE entries_fts MATCH ? AND e.scope_id IN (${marks}) AND e.kind != 'profile'
+           AND (? <= 0 OR -bm25(entries_fts) >= ?)
          ORDER BY rank LIMIT ?`
       )
-      .all(q, ...scopeIds, limit) as Array<EntryRow & { rank: number }>
+      .all(q, ...scopeIds, minScore, minScore, limit) as Array<EntryRow & { rank: number }>
     return rows.map(toEntry)
   }
 

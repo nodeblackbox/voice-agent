@@ -48,6 +48,7 @@ export const IPC = {
   openExternal: 'shell:open',
 
   // renderer -> main (send, fire and forget)
+  logWrite: 'log:write',
   audioFrame: 'audio:frame',
   playbackStarted: 'playback:started',
   playbackFinished: 'playback:finished',

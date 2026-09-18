@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import {
   Check,
-  ChevronDown,
-  ChevronRight,
   CircleDot,
   Globe,
   Headphones,
@@ -14,12 +12,13 @@ import {
   Clock,
   type LucideIcon
 } from 'lucide-react'
-import type { EndpointSettings, KeyStatus, Provider, ServiceStatus, VoiceInfo } from '@shared/types'
+import type { KeyStatus, Provider, ServiceStatus, VoiceInfo } from '@shared/types'
 import { T, serviceColor, serviceLabel } from '../theme'
 import { useStore } from '../state/store'
 import { Btn, Card, Dot, Page, Row, Select, TextInput, Toggle } from '../components/primitives'
 import { listDevices, type DeviceLists } from '../audio/devices'
 import { McpSection } from './settings/McpSection'
+import { TuningSection } from './settings/TuningSection'
 
 function Section({ icon: Icon, title, children }: { icon: LucideIcon; title: string; children: ReactNode }) {
   return (
@@ -38,23 +37,6 @@ const PROVIDERS: Array<{ id: Provider; label: string }> = [
   { id: 'groq', label: 'Groq' },
   { id: 'google', label: 'Google Gemini' },
   { id: 'xai', label: 'xAI Grok' }
-]
-
-const ENDPOINT_FIELDS: Array<{ key: keyof EndpointSettings; label: string; min: number; max: number; step: number; hint: string }> = [
-  { key: 'vadThreshold', label: 'VAD threshold', min: 0.2, max: 0.9, step: 0.05, hint: 'speech probability to open an utterance' },
-  { key: 'minSpeechMs', label: 'Min speech', min: 100, max: 800, step: 50, hint: 'ms of speech before it counts' },
-  { key: 'minSilenceMs', label: 'Min silence', min: 100, max: 800, step: 50, hint: 'ms before Smart Turn starts scoring' },
-  { key: 'maxSilenceMs', label: 'Max silence', min: 600, max: 3000, step: 100, hint: 'ms hard timeout for end of turn' },
-  { key: 'checkEveryMs', label: 'Check every', min: 100, max: 500, step: 50, hint: 'ms between Smart Turn checks' },
-  { key: 'turnThreshold', label: 'Turn threshold', min: 0.4, max: 0.95, step: 0.05, hint: 'model confidence to end the turn' },
-  { key: 'turnHighThreshold', label: 'Turn high threshold', min: 0.6, max: 1, step: 0.05, hint: 'end regardless of trailing filler word' },
-  { key: 'bargeInThreshold', label: 'Barge-in VAD', min: 0.4, max: 0.95, step: 0.05, hint: 'speech probability while the agent talks' },
-  { key: 'bargeInChunks', label: 'Barge-in chunks', min: 3, max: 30, step: 1, hint: '32 ms hits of speech credit to cut the agent' },
-  { key: 'duckChunks', label: 'Duck chunks', min: 1, max: 10, step: 1, hint: 'hits before the voice is ducked' },
-  { key: 'duckGain', label: 'Duck gain', min: 0, max: 1, step: 0.05, hint: 'playback volume while ducked' },
-  { key: 'bargeInDecay', label: 'Barge-in decay', min: 0, max: 5, step: 1, hint: 'credit lost per silent chunk' },
-  { key: 'bargeInReleaseChunks', label: 'Release chunks', min: 2, max: 20, step: 1, hint: 'silent chunks before a backchannel is forgiven' },
-  { key: 'partialEveryMs', label: 'Partials every', min: 300, max: 2000, step: 100, hint: 'ms between live captions' }
 ]
 
 function VoiceOutput() {
@@ -163,7 +145,6 @@ function VoiceInput() {
   const services = useStore((s) => s.services)
   const pushToast = useStore((s) => s.pushToast)
   const [devices, setDevices] = useState<DeviceLists>({ inputs: [], outputs: [] })
-  const [advanced, setAdvanced] = useState(false)
   const [restarting, setRestarting] = useState(false)
 
   const refresh = useCallback(async () => {
@@ -205,8 +186,6 @@ function VoiceInput() {
     }
   }
 
-  const setEndpoint = (key: keyof EndpointSettings, value: number) => void updateSettings({ endpoint: { ...settings.endpoint, [key]: value } })
-
   return (
     <Section icon={Mic} title="Voice input">
       <Card pad={0}>
@@ -234,35 +213,7 @@ function VoiceInput() {
               </Btn>
             </span>
           </Row>
-          <Row label="Turn detection" sub="Silero VAD + Smart Turn v3.2; barge-in cancels generation and playback">
-            <button
-              onClick={() => setAdvanced(!advanced)}
-              className="inline-flex items-center gap-1 text-xs"
-              style={{ color: T.text2, background: 'none', border: 'none', cursor: 'pointer' }}
-            >
-              {advanced ? <ChevronDown size={12} /> : <ChevronRight size={12} />} advanced
-            </button>
-          </Row>
-          {advanced && (
-            <div className="flex flex-col gap-1 py-2">
-              {ENDPOINT_FIELDS.map((f) => (
-                <div key={f.key} className="flex items-center gap-3 py-1.5 text-xs">
-                  <span style={{ width: 150, color: T.text2 }}>{f.label}</span>
-                  <input
-                    type="range"
-                    min={f.min}
-                    max={f.max}
-                    step={f.step}
-                    value={settings.endpoint[f.key]}
-                    onChange={(e) => setEndpoint(f.key, Number(e.target.value))}
-                    style={{ flex: 1 }}
-                  />
-                  <span style={{ width: 52, textAlign: 'right', fontFamily: T.mono, color: T.text }}>{settings.endpoint[f.key]}</span>
-                  <span style={{ width: 260, color: T.text3 }}>{f.hint}</span>
-                </div>
-              ))}
-            </div>
-          )}
+          <Row label="Turn detection" sub="Silero VAD + Smart Turn v3.2; barge-in cancels generation and playback. Every threshold is in the Tuning section below." />
         </div>
       </Card>
     </Section>
@@ -489,6 +440,7 @@ export function SettingsView() {
         <VoiceOutput />
         <VoiceInput />
         <Behaviour />
+        <TuningSection />
         <ContextSection />
         <Providers />
         <WebSearch />

@@ -4,6 +4,7 @@ import type {
   ChatMessage,
   ContextSnapshot,
   KeyStatus,
+  LogLevel,
   McpServerConfig,
   McpServerStatus,
   Skill,
@@ -95,6 +96,8 @@ export interface VoiceAgentApi {
   }
   context: { snapshot(): Promise<ContextSnapshot> }
   shell: { open(url: string): Promise<void> }
+  /** Renderer log lines land in the main process log files (through the same flood guard). */
+  log: { write(level: LogLevel, scope: string, msg: string): void }
   onEvent(handler: (event: AgentEvent) => void): () => void
   onAudioChunk(handler: (chunk: AudioChunk) => void): () => void
   onAudioCancel(handler: (turnId: string | null) => void): () => void

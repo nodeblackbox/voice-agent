@@ -1,5 +1,5 @@
 import { stepCountIs, streamText, type LanguageModel, type ModelMessage, type ToolSet } from 'ai'
-import type { ModelInfo, TurnMetrics } from '@shared/types'
+import type { ModelInfo, SpeechSettings, TurnMetrics } from '@shared/types'
 import { MissingKeyError, type ModelFactory } from '../providers/factory'
 import { SentenceChunker } from '../speech/chunker'
 import { SpeakableFilter } from '../prompts/speakable'
@@ -17,6 +17,7 @@ export interface RunnerDeps {
   maxSteps: number
   format: StyleFormat
   speaker: Speaker
+  speech: SpeechSettings
   fillerEnabled: boolean
   firstTokenTimeoutMs: number
   stallTimeoutMs: number
@@ -28,6 +29,7 @@ export interface RunnerDeps {
   onMetrics(m: TurnMetrics): void
   onNotice(text: string): void
   log(msg: string): void
+  trace?(ev: string, data?: Record<string, unknown>): void
 }
 
 export interface RunnerResult {
@@ -71,6 +73,7 @@ export class TurnRunner {
     for (const attempt of attempts) {
       if (signal.aborted) return { text: this.text, aborted: true, modelUsed: attempt.model.id }
       if (attempt.reason === 'fallback') this.deps.onNotice(`${this.deps.model.label} isn't responding, trying ${attempt.model.label}.`)
+      if (attempt.reason !== 'primary') this.deps.trace?.('turn.attempt', { reason: attempt.reason, model: attempt.model.id })
       try {
         const outcome = await this.attempt(attempt.model, signal)
         return outcome
@@ -78,6 +81,7 @@ export class TurnRunner {
         lastError = e
         if (signal.aborted) return { text: this.text, aborted: true, modelUsed: attempt.model.id }
         this.deps.log(`turn attempt (${attempt.reason}, ${attempt.model.id}) failed: ${describe(e)}`)
+        this.deps.trace?.('turn.attempt_failed', { reason: attempt.reason, model: attempt.model.id, error: describe(e), transient: isTransient(e) })
         if (this.text.length > 0) break
         if (e instanceof MissingKeyError) {
           if (attempt.reason !== 'fallback' && this.deps.fallback) continue
@@ -107,7 +111,7 @@ export class TurnRunner {
       timer = null
     }
 
-    const chunker = new SentenceChunker()
+    const chunker = new SentenceChunker(this.deps.speech.maxChars, this.deps.speech.firstMinWords)
     const filter = new SpeakableFilter(this.deps.format)
     let firstToken = false
     let firstSentence = false
@@ -133,6 +137,7 @@ export class TurnRunner {
             if (!firstToken) {
               firstToken = true
               this.metrics.ttftMs = Math.round(performance.now() - this.startedAt)
+              this.deps.trace?.('turn.first_token', { ttftMs: this.metrics.ttftMs, model: info.id })
             }
             this.text += part.text
             this.deps.onDelta(part.text)
@@ -140,6 +145,7 @@ export class TurnRunner {
               if (!firstSentence) {
                 firstSentence = true
                 this.metrics.ttfsMs = Math.round(performance.now() - this.startedAt)
+                this.deps.trace?.('turn.first_sentence', { ttfsMs: this.metrics.ttfsMs, chars: sentence.length })
               }
               this.deps.speaker.say(sentence)
             }
@@ -152,7 +158,9 @@ export class TurnRunner {
             if (this.deps.fillerEnabled && !fillerSaid) {
               fillerSaid = true
               for (const s of chunker.flush()) this.deps.speaker.say(s)
-              this.deps.speaker.say(fillerFor(part.toolName))
+              const filler = fillerFor(part.toolName)
+              this.deps.trace?.('turn.filler', { kind: 'lead-in', tool: part.toolName, text: filler })
+              this.deps.speaker.say(filler)
             }
             this.deps.onCue(true)
             arm(this.deps.toolStallTimeoutMs, `the ${part.toolName} tool took too long`)
@@ -205,6 +213,7 @@ export class TurnRunner {
       }
       if (outer.aborted) return { text: this.text, aborted: true, modelUsed: info.id }
       if (inner.signal.aborted) {
+        this.deps.trace?.('turn.stall', { reason: stallReason, model: info.id, chars: this.text.length })
         if (this.text.length > textBefore.length) {
           for (const s of chunker.flush()) this.deps.speaker.say(s)
           this.deps.onNotice(`Response cut short: ${stallReason}.`)

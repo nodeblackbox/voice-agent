@@ -1,5 +1,7 @@
-import type { AudioChunk } from '@shared/types'
+import type { AudioChunk, PlaybackSettings } from '@shared/types'
+import { DEFAULT_TUNING } from '@shared/tuning'
 import { ChunkQueue, isTerminalMarker, type QueuedChunk } from './chunk-queue'
+import { rlog } from '../lib/rlog'
 
 interface TurnQueue {
   queue: ChunkQueue<AudioBuffer>
@@ -10,8 +12,8 @@ interface TurnQueue {
 
 type SinkCapableContext = AudioContext & { setSinkId?: (id: string) => Promise<void> }
 
-const GAP_S = 0.02
-const RAMP_S = 0.06
+let gapS = DEFAULT_TUNING.playback.gapMs / 1000
+let rampS = DEFAULT_TUNING.playback.duckRampMs / 1000
 
 let ctx: SinkCapableContext | null = null
 let master: GainNode | null = null
@@ -40,7 +42,7 @@ function applyGain(): void {
   const now = ctx.currentTime
   master.gain.cancelScheduledValues(now)
   master.gain.setValueAtTime(master.gain.value, now)
-  master.gain.linearRampToValueAtTime(target, now + RAMP_S)
+  master.gain.linearRampToValueAtTime(target, now + rampS)
 }
 
 function getTurn(turnId: string): TurnQueue {
@@ -87,7 +89,7 @@ async function pump(turnId: string, t: TurnQueue): Promise<void> {
       if (!item) return
       const c = ensure()
       if (item.buffer) {
-        const start = Math.max(c.currentTime + GAP_S, t.nextTime)
+        const start = Math.max(c.currentTime + gapS, t.nextTime)
         const src = c.createBufferSource()
         src.buffer = item.buffer
         src.connect(master ?? c.destination)
@@ -123,7 +125,8 @@ async function handleChunk(chunk: AudioChunk): Promise<void> {
   if (chunk.mp3.byteLength > 0) {
     try {
       buffer = await ensure().decodeAudioData(chunk.mp3.slice(0))
-    } catch {
+    } catch (e) {
+      rlog('warn', 'playback', `decode failed for seq ${chunk.seq} (${chunk.mp3.byteLength} bytes): ${e instanceof Error ? e.message : String(e)}`)
       buffer = null
     }
   }
@@ -183,12 +186,17 @@ export const playback = {
     duck = Math.min(1, Math.max(0, gain))
     applyGain()
   },
+  configure(p: PlaybackSettings): void {
+    gapS = p.gapMs / 1000
+    rampS = p.duckRampMs / 1000
+  },
   async setOutput(deviceId?: string): Promise<void> {
     const c = ensure()
     if (typeof c.setSinkId !== 'function') return
     try {
       await c.setSinkId(deviceId ?? '')
-    } catch {
+    } catch (e) {
+      rlog('warn', 'playback', `setSinkId(${deviceId ?? 'default'}) failed, falling back to the default output: ${e instanceof Error ? e.message : String(e)}`)
       await c.setSinkId('').catch(() => undefined)
     }
   },

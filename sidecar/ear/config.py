@@ -26,9 +26,10 @@ class EndpointConfig:
     duck_gain: float = 0.25
     barge_in_decay: int = 1
     barge_in_release_chunks: int = 6
-    partial_every_ms: int = 700
-    preroll_ms: int = 300
+    partial_every_ms: int = 600
+    preroll_ms: int = 1000
     max_utterance_ms: int = 30000
+    level_every_frames: int = 3
 
     def update(self, values: dict[str, Any]) -> list[str]:
         """Apply camelCase JSON keys in place; returns the keys that were ignored."""
