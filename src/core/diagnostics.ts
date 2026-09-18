@@ -34,6 +34,8 @@ export function analyzeSession(events: TraceEvent[]): SessionAnalysis {
     asrReloads: 0,
     gpuMiB: null,
     crashes: 0,
+    resumes: { resume: 0, backchannel: 0, empty: 0 },
+    migratedDefaults: [],
     latency: {}
   }
   const first = events[0]?.t ? Date.parse(events[0].t) : NaN
@@ -122,6 +124,16 @@ export function analyzeSession(events: TraceEvent[]): SessionAnalysis {
       case 'app.crash':
         a.crashes++
         break
+      case 'turn.resume': {
+        const k = String(e.kind) as keyof SessionAnalysis['resumes']
+        if (k in a.resumes) a.resumes[k]++
+        break
+      }
+      case 'settings.migrated': {
+        const list = (e.migrated as Array<{ group: string; key: string; from: unknown; to: unknown }> | undefined) ?? []
+        for (const m of list) a.migratedDefaults.push(`${m.group}.${m.key} ${String(m.from)}→${String(m.to)}`)
+        break
+      }
       default:
         break
     }
@@ -260,6 +272,8 @@ export function renderDiagnostics(d: DiagnosticsInput): string {
     if (x.timeoutLastWords.length) lines.push(`- last word at timeouts: ${x.timeoutLastWords.map(([w, n]) => `${w} ×${n}`).join(', ')}`)
     lines.push(`- fragments: ${x.mergeable} looked unfinished, ${x.continuations} resumed inside the window, ${x.merged} merged; ${x.segments} long-utterance segments`)
     lines.push(`- cancels: ${x.cancels.newInput} new input, ${x.cancels.bargeIn} barge-in, ${x.cancels.continuation} continuation; barge-in duck ${x.bargein.duck} / cut ${x.bargein.cut} / release ${x.bargein.release}; self-cut suspects ${x.selfCutSuspects}`)
+    lines.push(`- resumes without a model call: ${x.resumes.resume} asked for, ${x.resumes.backchannel} after a backchannel, ${x.resumes.empty} after a wordless cut`)
+    if (x.migratedDefaults.length) lines.push(`- defaults migrated at launch: ${x.migratedDefaults.join(', ')}`)
     lines.push(`- dropped finals ${x.dropped}, stalls ${x.stalls}, fallbacks ${x.fallbacks}, step limits ${x.stepLimits}, note echoes ${x.noteEchoes}, ASR failures ${x.asrFailures} (reloads ${x.asrReloads}), crashes ${x.crashes}${x.gpuMiB !== null ? `, GPU ${x.gpuMiB} MiB` : ''}`)
     lines.push('')
   }

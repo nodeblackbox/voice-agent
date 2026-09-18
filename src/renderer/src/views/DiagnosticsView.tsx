@@ -27,6 +27,8 @@ function Analysis({ a }: { a: SessionAnalysis | null }) {
       {row('fragments', `${a.mergeable} looked unfinished · ${a.continuations} resumed in the window · ${a.merged} merged · ${a.segments} segments`)}
       {row('cancels', `${a.cancels.newInput} new input · ${a.cancels.bargeIn} barge-in · ${a.cancels.continuation} continuation`, a.cancels.newInput + a.cancels.bargeIn > a.turns / 2)}
       {row('barge-in', `duck ${a.bargein.duck} · cut ${a.bargein.cut} · release ${a.bargein.release} · self-cut suspects ${a.selfCutSuspects}`, a.selfCutSuspects > 0)}
+      {a.resumes && row('resumes (no model call)', `${a.resumes.resume} asked for · ${a.resumes.backchannel} after a backchannel · ${a.resumes.empty} after a wordless cut`)}
+      {(a.migratedDefaults?.length ?? 0) > 0 && row('defaults migrated', a.migratedDefaults.join(', '))}
       {row('trouble', `dropped ${a.dropped} · stalls ${a.stalls} · fallbacks ${a.fallbacks} · step limits ${a.stepLimits} · note echoes ${a.noteEchoes} · ASR failures ${a.asrFailures} (reloads ${a.asrReloads}) · crashes ${a.crashes}${a.gpuMiB !== null ? ` · GPU ${a.gpuMiB} MiB` : ''}`, a.asrFailures > 0 || a.crashes > 0)}
     </div>
   )

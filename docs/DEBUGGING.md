@@ -27,7 +27,8 @@ Every line has `t` (ISO time), `sid` (session), usually `turn`, and `ev`. Prefix
 |---|---|---|
 | `state` | agent state machine | `{from, to, event}` — every transition (`idle`, `listening`, `user_speaking`, `thinking`, `tool`, `speaking`, `interrupted`) |
 | `ear.*` | sidecar events (never `level`) | `speech_start{earT}`, `partial{text}`, `speech_end{reason, silenceMs, turnP, speechMs, checks[{silenceMs,p,heldOnFiller,lastWord,capMs}], afterCut, capMs, segments}`, `segment{text, index}` (older part of a long utterance, turn still open), `final{text, durationMs, asrMs, asrRtf, queuedMs, afterCut, segments}`, `bargein{stage: duck|cut|release, prerollMs}`, `status{stage}`, `ready{loadS}`, `stats{turns, turnChecks, turnCostP50Ms, heldOnFiller, backchannels, cuts, cutsEmptyFinal}`, `error` |
-| `turn.*` | agent core | `start{via, text, asrMs, queuedMs, endReason, silenceMs, turnP, model, style, mode, tools, memoryHints…}`, `first_token{ttftMs}`, `first_sentence{ttfsMs}`, `first_audio{ttfaMs, speechEndToAudioMs, ttsFirstMs, ttsFirstByteMs, rendererMs}`, `tool_start{id, name, summary}`, `tool_end{id, name, ok, ms, detail}`, `filler{kind: lead-in|continuation, text}`, `attempt{reason, model}`, `attempt_failed{error, transient}`, `stall{reason}`, `step_limit`, `notice{text}`, `self_cut_suspect{overlap}`, `dropped{reason}`, `spoken_split{seq, offsetS, durationS}`, `cancel{reason, spokenText, unspokenText, metrics}`, `drain_timeout{waitMs}` (the renderer never reported the audio finished, e.g. audio device error), `end{metrics, fillers, ttsDroppedFrames}`, `error{message}`, `mergeable{reason}` (this transcript looked unfinished; a resume inside the window merges), `continuation{gapMs}` (the user resumed: reply cancelled silently), `merged{parts, text}` (the joined transcript starts a turn), `segment{index}` |
+| `turn.*` | agent core | `start{via, text, asrMs, queuedMs, endReason, silenceMs, turnP, model, style, mode, tools, memoryHints…}`, `first_token{ttftMs}`, `first_sentence{ttfsMs}`, `first_audio{ttfaMs, speechEndToAudioMs, ttsFirstMs, ttsFirstByteMs, rendererMs}`, `tool_start{id, name, summary}`, `tool_end{id, name, ok, ms, detail}`, `filler{kind: lead-in|continuation, text}`, `attempt{reason, model}`, `attempt_failed{error, transient}`, `stall{reason}`, `step_limit`, `notice{text}`, `self_cut_suspect{overlap}`, `dropped{reason}`, `spoken_split{seq, offsetS, durationS}`, `cancel{reason, spokenText, unspokenText, metrics}`, `drain_timeout{waitMs}` (the renderer never reported the audio finished, e.g. audio device error), `end{metrics, fillers, ttsDroppedFrames}`, `error{message}`, `mergeable{reason}` (this transcript looked unfinished; a resume inside the window merges), `continuation{gapMs}` (the user resumed: reply cancelled silently), `merged{parts, text}` (the joined transcript starts a turn), `segment{index}`, `resume{kind: resume|backchannel|empty, userText, heardChars, remainingChars, count, text}` (an interrupted reply replayed from its cut sentence, no model call; `end{resumed}` closes it) |
+| `settings.migrated` | main | `{migrated: [{group, key, from, to}]}` — superseded tuning defaults replaced at launch (see docs/TUNING.md "Changing a default") |
 | `tts.warm` | agent | `{turnId, ms}` — the Edge socket pre-opened at turn start (only logged when it had to reconnect or succeeded) |
 | `tts.sentence` | speaker | `{seq, kind, chars, ms, firstByteMs, attempts, outcome: ok|skip|fallback, engine}` |
 | `playback.*` | renderer via agent | `started{seq, kind}`, `finished{seq}`, `drained{chunks}` |
@@ -71,6 +72,19 @@ Each of those has a knob in `docs/TUNING.md`.
 the renderer main thread is too busy to run the audio callbacks. `app.log` also has
 `renderer:playback: seq 0 scheduled N ms after it arrived`. Check what else is loading the window
 (DevTools, a huge tool result, an extension) and `uiFlushMs`.
+
+**"It kept talking over me."** Find your `ear.speech_start` (or the first `ear.partial`) and the
+`ear.bargein stage=cut` before it: with `bargeInInstant` the cut lands ~100 ms after your first
+voiced frame and `turn.cancel{reason: barge-in}` follows within a few ms, and there is no `duck`
+stage at all. A `duck` means the staged mode is on; a cut that comes late means `bargeInThreshold`
+is above what your mic delivers (`ear.level` is not traced, but the partial's `earT` vs the cut's
+timestamp show the delay).
+
+**"I said 'go on' and it started over / asked the model."** Look for `turn.resume` after your
+utterance. Missing → the window had closed (`resumeWindowMs` from `interruptedAt`), the transcript had
+a `?` or extra words (`turn.start` shows what the model got), or the phrase is not in
+`resumePhrases`. Present with `kind=backchannel` when you meant a new turn → remove the word from
+`backchannelWords` or turn `resumeOnBackchannel` off.
 
 ## Three complaints
 

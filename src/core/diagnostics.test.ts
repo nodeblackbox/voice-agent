@@ -53,6 +53,11 @@ describe('diagnostics', () => {
       { t: at(1400), ev: 'turn.end', metrics: { speechEndToAudioMs: 1100, fallbackUsed: true } },
       { t: at(1500), ev: 'turn.attempt', reason: 'fallback' },
       { t: at(1600), ev: 'ear.stats', asrFailures: 2, asrReloads: 1, gpuMiB: 5000 },
+      { t: at(1700), ev: 'turn.resume', kind: 'backchannel' },
+      { t: at(1800), ev: 'turn.resume', kind: 'resume' },
+      { t: at(1900), ev: 'turn.resume', kind: 'empty' },
+      { t: at(1950), ev: 'turn.resume', kind: 'backchannel' },
+      { t: at(2000), ev: 'settings.migrated', migrated: [{ group: 'endpoint', key: 'maxSilenceMs', from: 1200, to: 1500 }] },
       { t: at(60_000), ev: 'app.crash' }
     ]
     const a = analyzeSession(trace)
@@ -77,6 +82,8 @@ describe('diagnostics', () => {
       asrReloads: 1,
       gpuMiB: 5000,
       crashes: 1,
+      resumes: { resume: 1, backchannel: 2, empty: 1 },
+      migratedDefaults: ['endpoint.maxSilenceMs 1200→1500'],
       spanMin: 1
     })
     expect(a.latency.speechEndToAudioMs).toEqual({ p50: 1000, p95: 1090, n: 2 })

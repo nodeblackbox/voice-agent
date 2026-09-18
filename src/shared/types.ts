@@ -160,6 +160,10 @@ export interface SessionAnalysis {
   asrReloads: number
   gpuMiB: number | null
   crashes: number
+  /** Interrupted replies replayed without a model call, by what triggered it. */
+  resumes: { resume: number; backchannel: number; empty: number }
+  /** Tuning keys whose superseded default was replaced at load (`group.key old→new`). */
+  migratedDefaults: string[]
   latency: SessionSummary['latency']
 }
 
