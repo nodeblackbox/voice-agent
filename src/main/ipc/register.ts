@@ -12,7 +12,7 @@ import type { SidecarService } from '../services/sidecar'
 import type { SearxngService } from '../services/searxng'
 import type { McpService } from '../services/mcp'
 import { log, logAt } from '../services/log'
-import { diagnosticsReport, lastTurn, listLogs, openLogsFolder, readTrace, tailLog } from '../services/diagnostics'
+import { diagnosticsReport, lastTurn, listLogs, openLogsFolder, readTrace, sessionAnalysis, suggestTuning, tailLog } from '../services/diagnostics'
 
 const LEVELS = new Set<LogLevel>(['debug', 'info', 'warn', 'error'])
 
@@ -179,6 +179,8 @@ export function registerIpc(d: IpcDeps): void {
   h(IPC.logsTail, (_e, name: string, lines?: number) => tailLog(String(name), lines))
   h(IPC.logsOpenFolder, () => openLogsFolder())
   h(IPC.diagReport, () => diagnosticsReport({ agent: d.agent, settings: () => d.settings.get(), services: d.services }))
+  h(IPC.diagAnalysis, () => sessionAnalysis(d.agent.currentSessionId))
+  h(IPC.diagSuggest, () => suggestTuning({ agent: d.agent, settings: () => d.settings.get(), services: d.services, keys: d.settings }))
   h(IPC.traceSession, (_e, sessionId?: string | null, limit?: number) => readTrace(sessionId ?? d.agent.currentSessionId, limit))
   h(IPC.traceLastTurn, () => lastTurn(d.agent.currentSessionId))
   h(IPC.sessionSummary, () => d.agent.summary())

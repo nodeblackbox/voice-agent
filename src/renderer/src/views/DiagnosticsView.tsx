@@ -1,9 +1,103 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Activity, AlertTriangle, Check, Copy, Download, Ear, FolderOpen, RefreshCw, Timer } from 'lucide-react'
-import type { LogFileInfo, SessionSummary, TraceEvent } from '@shared/types'
+import { Activity, AlertTriangle, Check, Copy, Download, Ear, FolderOpen, RefreshCw, SlidersHorizontal, Sparkles, Timer } from 'lucide-react'
+import type { LogFileInfo, SessionAnalysis, SessionSummary, Settings, TraceEvent, TuningSuggestion } from '@shared/types'
+import { TUNING, type TuningGroup } from '@shared/tuning'
 import { T } from '../theme'
 import { useStore } from '../state/store'
 import { Btn, Card, Empty, Page, SectionTitle, Tag } from '../components/primitives'
+
+function Analysis({ a }: { a: SessionAnalysis | null }) {
+  if (!a || a.voiceTurns === 0) return <Empty>No voice turns in this session yet.</Empty>
+  const caps = Object.entries(a.timeoutsByCap)
+    .map(([cap, n]) => `${cap === 'unknown' ? '?' : Number(cap) >= 60_000 ? 'max length' : `${Number(cap) / 1000}s cap`} ×${n}`)
+    .join(', ')
+  const row = (label: string, value: string, warn = false) => (
+    <div key={label} className="flex items-start gap-3 text-xs py-1" style={{ borderBottom: `1px solid ${T.border}` }}>
+      <span style={{ width: 170, flexShrink: 0, color: T.text3 }}>{label}</span>
+      <span style={{ color: warn ? T.amber : T.text2, fontFamily: T.mono }}>{value}</span>
+    </div>
+  )
+  const timeoutShare = a.endReasons.done + a.endReasons.timeout ? Math.round((a.endReasons.timeout / (a.endReasons.done + a.endReasons.timeout)) * 100) : 0
+  return (
+    <div className="flex flex-col">
+      {row('voice turns', `${a.voiceTurns} of ${a.turns} in ${a.spanMin} min`)}
+      {row('turn ends', `${a.endReasons.done} by Smart Turn (${a.doneAtFirstCheck} at the first check), ${a.endReasons.timeout} by a hard cap (${timeoutShare}%)${caps ? `: ${caps}` : ''}`, timeoutShare >= 30)}
+      {row('score at the end', `<0.3 ×${a.turnP.low} · 0.3–0.7 ×${a.turnP.mid} · 0.7–0.9 ×${a.turnP.high} · ≥0.9 ×${a.turnP.confident} · filler holds ${a.fillerHolds}`)}
+      {a.timeoutLastWords.length > 0 && row('last word at timeouts', a.timeoutLastWords.map(([w, n]) => `${w} ×${n}`).join(', '))}
+      {row('fragments', `${a.mergeable} looked unfinished · ${a.continuations} resumed in the window · ${a.merged} merged · ${a.segments} segments`)}
+      {row('cancels', `${a.cancels.newInput} new input · ${a.cancels.bargeIn} barge-in · ${a.cancels.continuation} continuation`, a.cancels.newInput + a.cancels.bargeIn > a.turns / 2)}
+      {row('barge-in', `duck ${a.bargein.duck} · cut ${a.bargein.cut} · release ${a.bargein.release} · self-cut suspects ${a.selfCutSuspects}`, a.selfCutSuspects > 0)}
+      {row('trouble', `dropped ${a.dropped} · stalls ${a.stalls} · fallbacks ${a.fallbacks} · step limits ${a.stepLimits} · note echoes ${a.noteEchoes} · ASR failures ${a.asrFailures} (reloads ${a.asrReloads}) · crashes ${a.crashes}${a.gpuMiB !== null ? ` · GPU ${a.gpuMiB} MiB` : ''}`, a.asrFailures > 0 || a.crashes > 0)}
+    </div>
+  )
+}
+
+function Suggestions({ result, busy, onRun, onApply }: { result: { suggestions: TuningSuggestion[]; model: string; raw?: string } | null; busy: boolean; onRun: () => void; onApply: (s: TuningSuggestion[]) => void }) {
+  const [applied, setApplied] = useState<Set<string>>(new Set())
+  const key = (s: TuningSuggestion) => `${s.group}.${s.key}`
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-2 text-xs" style={{ color: T.text3, lineHeight: 1.5 }}>
+        <span className="flex-1">The current model reads the analysis above and the parameter docs, and proposes changes with a reason each. Nothing is applied until you press Apply; applied changes land in Settings → Tuning like any other edit.</span>
+        <Btn small primary icon={Sparkles} onClick={onRun} disabled={busy}>
+          {busy ? 'Thinking…' : 'Suggest tuning'}
+        </Btn>
+      </div>
+      {result && result.suggestions.length === 0 && (
+        <Empty>
+          No changes suggested by {result.model}.{result.raw ? ` It said: “${result.raw}”` : ''}
+        </Empty>
+      )}
+      {result && result.suggestions.length > 0 && (
+        <div className="flex flex-col">
+          {result.suggestions.map((s) => {
+            const param = (TUNING as Record<string, Record<string, { label: string }>>)[s.group]?.[s.key]
+            const done = applied.has(key(s))
+            return (
+              <div key={key(s)} className="flex items-start gap-3 text-xs py-2" style={{ borderBottom: `1px solid ${T.border}` }}>
+                <span className="flex flex-col gap-0.5" style={{ width: 200, flexShrink: 0 }}>
+                  <span style={{ color: T.text }}>{param?.label ?? s.key}</span>
+                  <span style={{ color: T.text3, fontFamily: T.mono }}>
+                    {String(s.current)} → <span style={{ color: T.cyan }}>{String(s.value)}</span>
+                  </span>
+                </span>
+                <span className="flex-1" style={{ color: T.text2, lineHeight: 1.5 }}>
+                  {s.reason}
+                </span>
+                <Btn
+                  small
+                  primary={!done}
+                  icon={done ? Check : undefined}
+                  disabled={done}
+                  onClick={() => {
+                    onApply([s])
+                    setApplied(new Set([...applied, key(s)]))
+                  }}
+                >
+                  {done ? 'Applied' : 'Apply'}
+                </Btn>
+              </div>
+            )
+          })}
+          {result.suggestions.some((s) => !applied.has(key(s))) && (
+            <div className="flex justify-end pt-2">
+              <Btn
+                small
+                onClick={() => {
+                  const rest = result.suggestions.filter((s) => !applied.has(key(s)))
+                  onApply(rest)
+                  setApplied(new Set([...applied, ...rest.map(key)]))
+                }}
+              >
+                Apply all
+              </Btn>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
 
 const LATENCY_LABELS: Record<string, string> = {
   asrMs: 'ASR',
@@ -131,17 +225,23 @@ export function DiagnosticsView() {
   const [summary, setSummary] = useState<SessionSummary | null>(null)
   const [errors, setErrors] = useState<string[]>([])
   const [logs, setLogs] = useState<LogFileInfo[]>([])
+  const [analysis, setAnalysis] = useState<SessionAnalysis | null>(null)
+  const [suggested, setSuggested] = useState<{ suggestions: TuningSuggestion[]; model: string; raw?: string } | null>(null)
+  const [suggesting, setSuggesting] = useState(false)
   const [copied, setCopied] = useState(false)
   const [busy, setBusy] = useState(false)
+  const settings = useStore((s) => s.settings)
+  const updateSettings = useStore((s) => s.updateSettings)
 
   const refresh = useCallback(async () => {
     setBusy(true)
     try {
-      const [turn, sum, err, files] = await Promise.all([window.api.diag.lastTurn(), window.api.diag.summary(), window.api.diag.tail('errors.log', 40), window.api.diag.logs()])
+      const [turn, sum, err, files, an] = await Promise.all([window.api.diag.lastTurn(), window.api.diag.summary(), window.api.diag.tail('errors.log', 40), window.api.diag.logs(), window.api.diag.analysis()])
       setLastTurn(turn)
       setSummary(sum)
       setErrors(err)
       setLogs(files)
+      setAnalysis(an)
     } catch (e) {
       pushToast('warn', `Could not load diagnostics: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
@@ -183,6 +283,30 @@ export function DiagnosticsView() {
 
   const traceFile = logs.find((l) => activeSessionId && l.name === `sessions/${activeSessionId}.jsonl`)
 
+  const runSuggest = async () => {
+    setSuggesting(true)
+    try {
+      const r = await window.api.diag.suggest()
+      setSuggested(r)
+      setAnalysis(r.analysis)
+    } catch (e) {
+      pushToast('error', `Tuning advisor failed: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setSuggesting(false)
+    }
+  }
+
+  const applySuggestions = (list: TuningSuggestion[]) => {
+    if (!settings) return
+    const patch: Record<string, Record<string, unknown>> = {}
+    for (const s of list) {
+      const group = s.group as TuningGroup
+      patch[group] = { ...(patch[group] ?? (settings[group] as object)), [s.key]: s.value }
+    }
+    void updateSettings(patch as Partial<Settings>)
+    pushToast('info', `Applied ${list.length} tuning change${list.length === 1 ? '' : 's'}`)
+  }
+
   return (
     <Page
       title="Diagnostics"
@@ -210,6 +334,12 @@ export function DiagnosticsView() {
         </Section>
         <Section icon={Activity} title="This session">
           <Summary s={summary} />
+        </Section>
+        <Section icon={SlidersHorizontal} title="Turn-taking analysis">
+          <div className="flex flex-col gap-4">
+            <Analysis a={analysis} />
+            <Suggestions result={suggested} busy={suggesting} onRun={() => void runSuggest()} onApply={applySuggestions} />
+          </div>
         </Section>
         <Section icon={Ear} title="Ear stats (last report)">
           {stats ? (

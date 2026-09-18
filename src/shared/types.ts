@@ -128,6 +128,47 @@ export interface TraceEvent {
   [key: string]: unknown
 }
 
+/** Turn-taking statistics computed from a session trace (the numbers a tuner needs). */
+export interface SessionAnalysis {
+  events: number
+  spanMin: number
+  turns: number
+  voiceTurns: number
+  endReasons: { done: number; timeout: number }
+  /** Timeouts by the cap that fired: keys are the cap in ms, or 'unknown'. */
+  timeoutsByCap: Record<string, number>
+  doneAtFirstCheck: number
+  fillerHolds: number
+  /** Last partial word at the check that ended a turn by timeout, most frequent first. */
+  timeoutLastWords: Array<[string, number]>
+  turnP: { low: number; mid: number; high: number; confident: number }
+  mergeable: number
+  continuations: number
+  merged: number
+  segments: number
+  cancels: { newInput: number; bargeIn: number; continuation: number; other: number }
+  bargein: { duck: number; cut: number; release: number }
+  selfCutSuspects: number
+  dropped: number
+  stalls: number
+  fallbacks: number
+  stepLimits: number
+  noteEchoes: number
+  asrFailures: number
+  asrReloads: number
+  gpuMiB: number | null
+  crashes: number
+  latency: SessionSummary['latency']
+}
+
+export interface TuningSuggestion {
+  group: string
+  key: string
+  value: number | boolean | string
+  current: number | boolean | string
+  reason: string
+}
+
 export interface LogFileInfo {
   /** File name, with a `sessions/` prefix for per-session traces. */
   name: string

@@ -52,6 +52,8 @@ export const IPC = {
   logsTail: 'logs:tail',
   logsOpenFolder: 'logs:open-folder',
   diagReport: 'diag:report',
+  diagAnalysis: 'diag:analysis',
+  diagSuggest: 'diag:suggest',
   traceSession: 'trace:session',
   traceLastTurn: 'trace:last-turn',
   sessionSummary: 'session:summary',

@@ -113,6 +113,23 @@ app (or a second copy of this one) holds the output device, or the selected outp
 `turn.filler kind=lead-in` and, past `speech.fillerAfterMs`, `kind=continuation`. If there is none,
 fillers are off in Behaviour or `fillerMinGapMs` suppressed the lead-in.
 
+## Turn-taking analysis and the tuning advisor
+
+The Diagnostics view's **Turn-taking analysis** section is `analyzeSession()` (`src/core/diagnostics.ts`)
+run over the current session's trace: turn ends by Smart Turn vs hard cap (and which cap), the score
+histogram at the end, the last word at each timeout, fragments/continuations/merges, cancels, barge-in
+stages, self-cut suspects, and the trouble counters (drops, stalls, fallbacks, ASR failures, crashes,
+VRAM). The same numbers are in the **Copy diagnostics** report, so a bug report carries them.
+
+**Suggest tuning** sends the parameter catalogue (every tunable with its doc, range and current value)
+plus that analysis to the current chat model and asks for at most six single-parameter changes with a
+reason each. Nothing changes until you press Apply; values are clamped to the parameter's range and no-op
+suggestions are dropped (`parseSuggestions`). The run is traced as `tuning.suggested{model, suggestions}`
+and the applied change as the usual `settings.changed`. Rough rules the advisor follows: hard-cap ends
+with a low score → `maxSilenceLowMs` / `turnLowThreshold`; normal-cap ends with a mid score →
+`maxSilenceMs` / `turnThreshold`; done-at-first-check plus continuations → filler words / hold; self-cut
+suspects → `bargeInThreshold`; slow speech end → audio → `firstMinWords` / `maxTokens`.
+
 ## Scripted reproduction
 
 ```powershell

@@ -19,9 +19,11 @@ import type {
   Provider,
   ServiceStatus,
   Session,
+  SessionAnalysis,
   SessionSummary,
   Settings,
   TraceEvent,
+  TuningSuggestion,
   VoiceInfo
 } from '../shared/types'
 
@@ -113,6 +115,10 @@ export interface VoiceAgentApi {
     openLogsFolder(): Promise<void>
     /** Markdown report: setup, services, tuning diff, session summary, last turn timeline, recent errors. */
     report(): Promise<string>
+    /** Turn-taking statistics for the current session, computed from its trace. */
+    analysis(): Promise<SessionAnalysis>
+    /** Ask the current model for tuning changes justified by the analysis. */
+    suggest(): Promise<{ suggestions: TuningSuggestion[]; analysis: SessionAnalysis; model: string; raw?: string }>
     trace(sessionId?: string | null, limit?: number): Promise<TraceEvent[]>
     lastTurn(): Promise<TraceEvent[]>
     summary(): Promise<SessionSummary>

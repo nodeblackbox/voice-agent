@@ -1,17 +1,49 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import { app, shell } from 'electron'
-import type { LogFileInfo, ServiceStatus, Settings } from '@shared/types'
+import { generateText } from 'ai'
+import type { LogFileInfo, ServiceStatus, SessionAnalysis, Settings, TuningSuggestion } from '@shared/types'
 import { pickTuning, tuningDiff } from '@shared/tuning'
 import type { TraceEvent } from '@core/trace'
-import { lastTurnEvents, renderDiagnostics } from '@core/diagnostics'
+import { TUNING_ADVISOR_SYSTEM, analyzeSession, lastTurnEvents, parseSuggestions, renderDiagnostics, tuningCatalogue } from '@core/diagnostics'
 import type { Agent } from '@core/agent'
-import { logDir, tracePath } from './log'
+import { ModelFactory } from '@core/providers/factory'
+import { MODELS, findModel } from '@core/providers/models'
+import type { KeySource } from '@core/providers/keys'
+import { log, logDir, trace, tracePath } from './log'
 
 export interface DiagnosticsDeps {
   agent: Agent
   settings: () => Settings
   services: () => ServiceStatus[]
+  keys?: KeySource
+}
+
+export function sessionAnalysis(sid: string | null): SessionAnalysis {
+  return analyzeSession(readTrace(sid, 20000))
+}
+
+/** Ask the current model for tuning changes justified by this session's numbers. */
+export async function suggestTuning(d: DiagnosticsDeps): Promise<{ suggestions: TuningSuggestion[]; analysis: SessionAnalysis; model: string; raw?: string }> {
+  const s = d.settings()
+  const analysis = sessionAnalysis(d.agent.currentSessionId)
+  if (!d.keys) throw new Error('no key source configured')
+  const info = findModel(s.modelId) ?? MODELS[0]!
+  const { model } = new ModelFactory(d.keys).create(info)
+  const prompt = [
+    '# Parameters (current values)',
+    tuningCatalogue(pickTuning(s)),
+    '',
+    '# Session analysis',
+    JSON.stringify(analysis, null, 1),
+    '',
+    'Respond with the JSON array only.'
+  ].join('\n')
+  const { text } = await generateText({ model, system: TUNING_ADVISOR_SYSTEM, prompt, abortSignal: AbortSignal.timeout(45_000), temperature: 0.2 })
+  const suggestions = parseSuggestions(text, pickTuning(s))
+  log('diag', `tuning advisor (${info.id}): ${suggestions.length} suggestion(s)`)
+  trace({ ev: 'tuning.suggested', sid: d.agent.currentSessionId, model: info.id, suggestions })
+  return { suggestions, analysis, model: info.id, raw: suggestions.length ? undefined : text.slice(0, 500) }
 }
 
 /** A file name inside the logs directory (or logs/sessions), never a path. */
@@ -78,6 +110,7 @@ export function diagnosticsReport(d: DiagnosticsDeps): string {
     tuningChanged: tuningDiff(pickTuning(s)),
     services: d.services(),
     summary: d.agent.summary(),
+    analysis: analyzeSession(events),
     selfCutSuspects: d.agent.selfCutSuspects,
     lastTurn: lastTurnEvents(events),
     lastStats,
