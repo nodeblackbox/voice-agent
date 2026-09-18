@@ -11,8 +11,8 @@ const BY_TOOL: Record<string, string[]> = {
 /** Spoken while a tool has been quiet for a while, so the agent never goes dead silent mid-work. */
 export const CONTINUATION = ['Still looking.', 'One sec.', 'Almost there.', 'Bear with me.']
 
-/** Spoken when the tool-round cap is hit instead of ending the turn silently. */
-export const STEP_LIMIT_PHRASE = "I've dug through several pages and I'm going in circles. Here's what I have so far."
+/** Spoken when the tool-round cap is hit before the model said anything, instead of ending the turn silently. */
+export const STEP_LIMIT_PHRASE = "I've hit my limit for tool calls this turn. Here's what I have so far."
 
 let counter = 0
 let continuationCounter = 0

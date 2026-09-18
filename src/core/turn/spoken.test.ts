@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { INTERRUPTED_BEFORE_SPEAKING, interruptionNote, remainder, splitSpoken, type SpokenChunk } from './spoken'
+import { interruptionNote, remainder, splitSpoken, type SpokenChunk } from './spoken'
 
 const chunks: SpokenChunk[] = [
   { seq: 0, text: 'Let me check that.', kind: 'filler' },
@@ -42,6 +42,5 @@ describe('splitSpoken', () => {
     expect(interruptionNote('')).toBe('[interrupted by the user here]')
     expect(interruptionNote('rest of it')).toBe('[interrupted by the user here; the rest was never spoken: "rest of it"]')
     expect(interruptionNote('x'.repeat(400), 50)).toMatch(/^\[interrupted by the user here; the rest was never spoken: "x{49}…"\]$/)
-    expect(INTERRUPTED_BEFORE_SPEAKING).toContain('before saying anything')
   })
 })

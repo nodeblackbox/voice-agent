@@ -86,7 +86,7 @@ export const TUNING = {
     stallTimeoutMs: n(8000, 2000, 30000, 500, 'core', 'Stall timeout', 'Abandon a reply that stops mid-stream for this long. What was already spoken is kept and the transcript says the response was cut short.', { unit: 'ms', old: 8000 }),
     toolStallTimeoutMs: n(25000, 5000, 120000, 1000, 'core', 'Tool stall timeout', 'Stall timeout while a tool call is in flight; searches and page reads legitimately take longer than token gaps.', { unit: 'ms', old: 25000 }),
     retryBackoffMs: n(400, 0, 3000, 100, 'core', 'Retry backoff', 'Pause before retrying the same model after a transient error (overloaded, 5xx).', { unit: 'ms', old: 400 }),
-    maxStepsAsk: n(2, 1, 6, 1, 'core', 'Max steps (Ask)', 'Tool rounds allowed per turn in Ask mode. When the cap is hit the agent says so instead of ending silently.', { unit: 'steps' }),
+    maxStepsAsk: n(4, 1, 8, 1, 'core', 'Max steps (Ask)', 'Tool rounds allowed per turn in Ask mode: a recall plus a couple of memory edits needs three or four. When the cap is hit before the model said anything, the agent says so instead of ending silently.', { unit: 'steps' }),
     maxStepsAgent: n(8, 1, 20, 1, 'core', 'Max steps (Agent)', 'Tool rounds allowed per turn in Agent mode.', { unit: 'steps' }),
     historyMessages: n(40, 4, 200, 2, 'core', 'History messages', 'Most recent messages sent to the model each turn. Tool results inside them are compacted separately.', { unit: 'messages' }),
     minUtteranceChars: n(2, 1, 10, 1, 'core', 'Min utterance chars', 'Final transcripts shorter than this are dropped without a turn.', { unit: 'chars' }),

@@ -83,7 +83,7 @@ ducked and bargeInReleaseChunks quiet frames → release: it was a backchannel, 
 | `stallTimeoutMs` | 8000 | 8000 | Gap between tokens mid-stream that abandons the reply. Already-chunked sentences are still spoken and the transcript says "response cut short". |
 | `toolStallTimeoutMs` | 25000 | 25000 | Same, while a tool call is in flight. |
 | `retryBackoffMs` | 400 | 400 | Pause before the same-model retry on a transient error. |
-| `maxStepsAsk` / `maxStepsAgent` | 2 / 8 | — | Tool rounds per turn by mode. Hitting the cap is spoken ("I've dug through several pages…") and traced as `hitStepLimit`. |
+| `maxStepsAsk` / `maxStepsAgent` | 4 / 8 | — | Tool rounds per turn by mode (a recall plus a few memory edits needs three or four). Hitting the cap before the model said anything is spoken ("I've hit my limit for tool calls this turn…") and traced as `hitStepLimit`. |
 | `historyMessages` | 40 | — | Most recent messages sent to the model. |
 | `minUtteranceChars` | 2 | — | Transcripts shorter than this are dropped without a turn. |
 | `toolResultKeepChars` | 700 | 700 | Characters of each tool result kept in history for later turns. The model already consumed the full result when it ran; this keeps later turns lean. |

@@ -38,9 +38,11 @@ describe('buildModelMessages', () => {
     expect(out[1]!.content).toBe('One.\n[interrupted by the user here; the rest was never spoken: "Two. Three."]')
   })
 
-  it('marks a reply interrupted before any audio as such', () => {
+  it('omits a reply the user never heard: a bracketed note there was echoed back by the model', () => {
     const msgs = [base({ role: 'user', text: 'x' }), base({ role: 'assistant', text: 'Never heard.', interrupted: true, spokenText: '' })]
-    expect(buildModelMessages(msgs, 't2', 'y', opts)[1]!.content).toBe('[interrupted by the user before saying anything]')
+    const out = buildModelMessages(msgs, 't2', 'y', opts)
+    expect(out.map((m) => m.role)).toEqual(['user', 'user'])
+    expect(JSON.stringify(out)).not.toContain('interrupted')
   })
 
   it('excludes the current turn and trims to maxMessages without starting on a dangling tool message', () => {

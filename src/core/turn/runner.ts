@@ -162,6 +162,7 @@ export class TurnRunner {
     let firstSentence = false
     let toolsInFlight = 0
     let lastFinish: string | undefined
+    let noteBuf = ''
     const textBefore = this.text
     const fallbackUsed = info.id !== this.deps.model.id
 
@@ -188,9 +189,30 @@ export class TurnRunner {
               this.metrics.ttftMs = Math.round(performance.now() - this.startedAt)
               this.deps.trace?.('turn.first_token', { ttftMs: this.metrics.ttftMs, model: info.id })
             }
-            this.text += part.text
-            this.deps.onDelta(part.text)
-            for (const sentence of chunker.feed(filter.feed(part.text))) {
+            let delta = part.text
+            // the model sometimes parrots the app's bracketed bookkeeping ("[interrupted …]"); never speak it
+            if (!this.text.trim()) {
+              noteBuf += delta
+              const m = /^\s*\[[^\]]{0,200}\]\s*/.exec(noteBuf)
+              if (m) {
+                this.deps.trace?.('turn.note_echo', { note: m[0].trim() })
+                delta = noteBuf.slice(m[0].length).trimStart()
+                noteBuf = ''
+              } else if (noteBuf.trimStart().startsWith('[') && noteBuf.length < 220 && !noteBuf.includes(']')) {
+                arm(this.deps.stallTimeoutMs, 'the model stopped mid-answer')
+                break
+              } else {
+                delta = noteBuf.trimStart()
+                noteBuf = ''
+              }
+              if (!delta) {
+                arm(this.deps.stallTimeoutMs, 'the model stopped mid-answer')
+                break
+              }
+            }
+            this.text += delta
+            this.deps.onDelta(delta)
+            for (const sentence of chunker.feed(filter.feed(delta))) {
               if (!firstSentence) {
                 firstSentence = true
                 this.metrics.ttfsMs = Math.round(performance.now() - this.startedAt)
@@ -260,16 +282,24 @@ export class TurnRunner {
       disarm()
       cancelContinuation()
       if (inner.signal.aborted && !outer.aborted) throw new Error(`stall: ${stallReason}`)
+      if (noteBuf && !this.text.trim()) {
+        // an unterminated "[" run at the very start: it was text after all
+        this.text += noteBuf
+        this.deps.onDelta(noteBuf)
+        chunker.feed(filter.feed(noteBuf))
+        noteBuf = ''
+      }
       for (const s of chunker.flush()) this.deps.speaker.say(s)
       let hitStepLimit = false
       if (lastFinish === 'tool-calls' && (this.metrics.steps ?? 0) >= this.deps.maxSteps) {
-        // the model still wanted tools when the round cap hit: say so instead of going quiet
+        // the model still wanted tools when the round cap hit: say so only if it said nothing else
         hitStepLimit = true
-        const phrase = (this.text ? ' ' : '') + STEP_LIMIT_PHRASE
-        this.text += phrase
-        this.deps.onDelta(phrase)
-        this.deps.speaker.say(STEP_LIMIT_PHRASE)
-        this.deps.trace?.('turn.step_limit', { steps: this.metrics.steps, maxSteps: this.deps.maxSteps })
+        this.deps.trace?.('turn.step_limit', { steps: this.metrics.steps, maxSteps: this.deps.maxSteps, spoke: this.text.length > 0 })
+        if (!this.text.trim()) {
+          this.text += STEP_LIMIT_PHRASE
+          this.deps.onDelta(STEP_LIMIT_PHRASE)
+          this.deps.speaker.say(STEP_LIMIT_PHRASE)
+        }
       }
       if (info.provider === 'groq') this.deps.factory.groqPool.report(key, 200)
       this.metrics.totalMs = Math.round(performance.now() - this.startedAt)

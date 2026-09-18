@@ -5,7 +5,7 @@
 
 import type { ModelMessage, ToolCallPart, ToolResultPart } from 'ai'
 import type { ChatMessage } from '@shared/types'
-import { INTERRUPTED_BEFORE_SPEAKING, interruptionNote } from './spoken'
+import { interruptionNote } from './spoken'
 
 export interface HistoryOptions {
   maxMessages: number
@@ -25,10 +25,11 @@ function safeJson(v: unknown): string {
   }
 }
 
-export function assistantHistoryText(m: ChatMessage): string {
+/** What the model sees for an assistant message; `null` when the user heard none of it (nothing to not-repeat). */
+export function assistantHistoryText(m: ChatMessage): string | null {
   if (!m.interrupted) return m.text
   const spoken = m.spokenText ?? ''
-  if (!spoken.trim()) return INTERRUPTED_BEFORE_SPEAKING
+  if (!spoken.trim()) return null
   return `${spoken}\n${interruptionNote(m.unspokenText ?? '')}`
 }
 
@@ -65,7 +66,7 @@ export function buildModelMessages(messages: ChatMessage[], currentTurnId: strin
       out.push({ role: 'tool', content: results })
     }
     for (const a of rows.filter((m) => m.role === 'assistant')) {
-      if (!a.text && !a.interrupted) continue
+      if (!a.text) continue
       const text = assistantHistoryText(a)
       if (text) out.push({ role: 'assistant', content: text })
     }

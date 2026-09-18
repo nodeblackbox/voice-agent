@@ -70,8 +70,6 @@ export function remainder(full: string, spoken: string): string {
   return f.split(' ').slice(spokenWords.length).join(' ').trim()
 }
 
-export const INTERRUPTED_BEFORE_SPEAKING = '[interrupted by the user before saying anything]'
-
 /** The note appended to an interrupted assistant message in the model's history. */
 export function interruptionNote(unspoken: string, maxChars = 300): string {
   if (!unspoken.trim()) return '[interrupted by the user here]'

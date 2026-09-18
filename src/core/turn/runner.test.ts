@@ -90,6 +90,7 @@ function harness(models: Record<string, MockLanguageModelV4>, over: Partial<Runn
     onMetrics: vi.fn(),
     onNotice: vi.fn(),
     log: vi.fn(),
+    trace: vi.fn(),
     ...over
   }
   return { deps, chunks, controller, speaker, run: async () => {
@@ -206,7 +207,7 @@ describe('TurnRunner', () => {
     expect(h.speaker.fillers).toBe(2)
   }, 10_000)
 
-  it('says so out loud when the tool round cap is hit', async () => {
+  it('says so out loud when the tool round cap is hit before the model said anything', async () => {
     const calc = tool({ description: 'add', inputSchema: z.object({ a: z.number(), b: z.number() }), execute: async ({ a, b }) => ({ sum: a + b }) })
     const h = harness({ 'anthropic:claude-haiku-4-5': mockModel([toolCallStream('calc', { a: 1, b: 2 })]) }, { tools: { calc }, maxSteps: 2, fillerEnabled: false })
     const r = await h.run()
@@ -214,6 +215,32 @@ describe('TurnRunner', () => {
     expect(r.text).toContain(STEP_LIMIT_PHRASE)
     expect(h.chunks.filter((c) => c.text).map((c) => c.text)).toEqual([STEP_LIMIT_PHRASE])
     expect(vi.mocked(h.deps.onMetrics).mock.calls[0]![0]).toMatchObject({ steps: 2, hitStepLimit: true })
+  })
+
+  it('stays quiet about the step cap when the model already answered', async () => {
+    const calc = tool({ description: 'add', inputSchema: z.object({ a: z.number(), b: z.number() }), execute: async ({ a, b }) => ({ sum: a + b }) })
+    const streams = [
+      [...textStream(['Let me look. ']).slice(0, -1), { type: 'tool-call' as const, toolCallId: 'call-1', toolName: 'calc', input: JSON.stringify({ a: 1, b: 2 }) }, { type: 'finish' as const, finishReason: { unified: 'tool-calls' as const, raw: 'tool_use' }, usage: usage(7, 3) }],
+      toolCallStream('calc', { a: 2, b: 2 })
+    ]
+    const h = harness({ 'anthropic:claude-haiku-4-5': mockModel(streams) }, { tools: { calc }, maxSteps: 2, fillerEnabled: false })
+    const r = await h.run()
+    expect(r.hitStepLimit).toBe(true)
+    expect(r.text).not.toContain(STEP_LIMIT_PHRASE)
+  })
+
+  it('strips a bracketed bookkeeping note the model echoes at the start of its reply', async () => {
+    const h = harness({ 'anthropic:claude-haiku-4-5': mockModel([textStream(['[interrupted by the ', 'user before saying anything]', ' Sure, go ahead.'])]) })
+    const r = await h.run()
+    expect(r.text).toBe('Sure, go ahead.')
+    expect(h.chunks.filter((c) => c.text).map((c) => c.text)).toEqual(['Sure, go ahead.'])
+    expect(h.deps.trace).toHaveBeenCalledWith('turn.note_echo', expect.objectContaining({ note: '[interrupted by the user before saying anything]' }))
+  })
+
+  it('keeps text that merely starts with a bracket', async () => {
+    const h = harness({ 'anthropic:claude-haiku-4-5': mockModel([textStream(['[Sam] is ', 'the name you gave me.'])]) })
+    const r = await h.run()
+    expect(r.text).toBe('is the name you gave me.')
   })
 
   it('treats a stall before the first token as a timeout that triggers fallback', async () => {
