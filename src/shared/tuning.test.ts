@@ -44,8 +44,8 @@ describe('tuning schema', () => {
   })
 
   it('tuningDiff lists only values that differ from the defaults', () => {
-    const t = sanitizeTuning({ speech: { firstMinWords: 4 } })
-    expect(tuningDiff(t)).toEqual([{ group: 'speech', key: 'firstMinWords', value: 4, default: 6 }])
+    const t = sanitizeTuning({ speech: { firstMinWords: 3 } })
+    expect(tuningDiff(t)).toEqual([{ group: 'speech', key: 'firstMinWords', value: 3, default: 4 }])
     expect(tuningDiff(DEFAULT_TUNING)).toEqual([])
   })
 

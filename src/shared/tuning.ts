@@ -99,7 +99,7 @@ export const TUNING = {
     mergeHoldMs: n(0, 0, 2000, 100, 'core', 'Hold reply when unfinished', 'Wait this long before sending an unfinished-looking transcript to the model, so a continuation merges without ever starting a reply. Costs latency on real endings that happen to look unfinished; 0 = reply immediately and cancel if you continue.', { unit: 'ms' })
   },
   speech: {
-    firstMinWords: n(6, 0, 15, 1, 'core', 'First clause min words', 'The first chunk of a reply may be cut at a comma/colon/dash once it has this many words, so speech starts before the first full sentence. 0 disables.', { unit: 'words', old: 6 }),
+    firstMinWords: n(4, 0, 15, 1, 'core', 'First clause min words', 'The first chunk of a reply may be cut at a comma/colon/dash once it has this many words, so speech starts before the first full sentence. 0 disables.', { unit: 'words', old: 6 }),
     maxChars: n(220, 80, 600, 10, 'core', 'Max sentence chars', 'Run-on sentences are force-cut at the last comma or space past this length so a long sentence cannot stall first audio.', { unit: 'chars', old: 220 }),
     fillerAfterMs: n(1500, 300, 6000, 100, 'core', 'Continuation filler after', 'If a tool is still running and nothing has been spoken for this long, say one short filler ("Still looking.") so the agent never goes dead quiet.', { unit: 'ms', old: 1500 }),
     fillerMinGapMs: n(4000, 0, 20000, 500, 'core', 'Filler min gap', 'Skip the lead-in filler for a tool call if another filler was spoken more recently than this.', { unit: 'ms' }),

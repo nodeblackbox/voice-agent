@@ -440,6 +440,11 @@ export class Agent {
       },
       controller.signal
     )
+    // Open the Edge socket while the model thinks so the first sentence skips the handshake.
+    if (speakThisTurn && this.engineFor(settings) === this.edge) {
+      const t0 = Date.now()
+      void this.edge.warm(settings.voice.voice).then((ok) => ok && this.tr('tts.warm', { turnId, ms: Date.now() - t0 }))
+    }
     const turn: ActiveTurn = {
       id: turnId,
       controller,

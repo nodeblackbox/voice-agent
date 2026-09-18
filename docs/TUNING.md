@@ -98,7 +98,7 @@ ducked and bargeInReleaseChunks quiet frames → release: it was a backchannel, 
 
 | key | default | old agent | what it does |
 |---|---|---|---|
-| `firstMinWords` | 6 | 6 | The first chunk may be released at a comma/colon/dash once it has this many words. "Yeah, let me think about that for a second, the answer is…" starts speaking after the first clause. The single biggest perceived-speed trick; 0 disables. |
+| `firstMinWords` | 4 | 6 | The first chunk may be released at a comma/colon/dash once it has this many words. "Yeah, let me think about that for a second, the answer is…" starts speaking after the first clause. The single biggest perceived-speed trick; 0 disables. Lowered from 6 after the stress test (first sentence took 313 ms of the 2.2 s median). The Edge socket is also pre-opened at turn start (`tts.warm` in the trace) so the first sentence skips the handshake. |
 | `maxChars` | 220 | 220 | Run-on sentences are force-cut at the last comma/space past this so a long sentence cannot stall first audio. |
 | `fillerAfterMs` | 1500 | 1500 | If a tool is still running and nothing has played for this long, say one continuation filler ("Still looking."). Once per tool call. |
 | `fillerMinGapMs` | 4000 | — | Skip the lead-in filler ("Let me check.") if another filler was spoken more recently than this, so back-to-back tool calls do not chatter. |
@@ -112,7 +112,7 @@ ducked and bargeInReleaseChunks quiet frames → release: it was a backchannel, 
 | key | default | what it does |
 |---|---|---|
 | `duckRampMs` | 60 | Gain ramp when ducking/restoring. |
-| `gapMs` | 20 | Minimum scheduling lead between chunks. |
+| `gapMs` | 20 | Minimum scheduling lead between chunks. The first chunk after silence uses 5 ms regardless: nothing is queued that it could collide with. |
 
 ## Memory injection (`memory`)
 
@@ -162,4 +162,4 @@ field that confirms it.
 - **First word after I interrupt is missing.** `prerollMs` ≤ `bargeInChunks × 32`. Raise preroll.
 - **It goes quiet during searches.** `fillerAfterMs` too high, or fillers disabled in Behaviour.
 - **Replies start late but the model was fast.** `ttfsMs - ttftMs` large → the first sentence is
-  long; lower `firstMinWords` (4) or `maxChars`.
+  long; lower `firstMinWords` (3) or `maxChars`.

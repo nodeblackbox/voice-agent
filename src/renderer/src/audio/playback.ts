@@ -21,6 +21,7 @@ interface TurnQueue {
 type SinkCapableContext = AudioContext & { setSinkId?: (id: string) => Promise<void> }
 
 let gapS = DEFAULT_TUNING.playback.gapMs / 1000
+const FIRST_GAP_S = 0.005
 let rampS = DEFAULT_TUNING.playback.duckRampMs / 1000
 
 let ctx: SinkCapableContext | null = null
@@ -118,7 +119,9 @@ async function pump(turnId: string, t: TurnQueue): Promise<void> {
       if (!item) return
       const c = ensure()
       if (item.buffer) {
-        const start = Math.max(c.currentTime + gapS, t.nextTime)
+        // The first chunk after silence needs no lead: nothing is queued that it could collide with.
+        const lead = t.nextTime <= c.currentTime ? Math.min(gapS, FIRST_GAP_S) : gapS
+        const start = Math.max(c.currentTime + lead, t.nextTime)
         const src = c.createBufferSource()
         src.buffer = item.buffer
         src.connect(master ?? c.destination)

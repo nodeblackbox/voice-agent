@@ -61,6 +61,12 @@ class Worker {
     this.voice = voice
   }
 
+  /** Reopen the socket if Edge closed it while idle; setMetadata is a no-op when it is still open. */
+  async warm(voice: string): Promise<void> {
+    await this.tts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3)
+    this.voice = voice
+  }
+
   dispose(): void {
     try {
       this.tts.close()
@@ -105,6 +111,25 @@ export class EdgeTtsEngine implements TtsEngine {
     const waiter = this.waiters.shift()
     if (waiter) waiter(w)
     else this.idle.push(w)
+  }
+
+  /**
+   * Pre-open one socket for `voice` so the first sentence of the coming reply skips the handshake.
+   * Runs while the model is still thinking; never throws and never waits for a busy pool.
+   */
+  async warm(voice: string): Promise<boolean> {
+    if (this.idle.length === 0 && this.count >= this.max) return false
+    const w = await this.acquire()
+    let healthy = true
+    try {
+      await w.warm(voice)
+      return true
+    } catch {
+      healthy = false
+      return false
+    } finally {
+      this.release(w, healthy)
+    }
   }
 
   async synth(req: TtsRequest, signal: AbortSignal): Promise<Buffer> {
