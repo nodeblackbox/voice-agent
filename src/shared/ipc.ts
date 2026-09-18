@@ -31,6 +31,8 @@ export const IPC = {
   memoryUpsert: 'memory:upsert',
   memoryDelete: 'memory:delete',
   memoryConfirm: 'memory:confirm',
+  memoryHistory: 'memory:history',
+  memoryUndo: 'memory:undo',
   projectsList: 'projects:list',
   projectsSave: 'projects:save',
   projectsDelete: 'projects:delete',

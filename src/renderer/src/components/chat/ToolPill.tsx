@@ -103,6 +103,59 @@ export function ToolPill({ tool }: { tool: ToolActivity }) {
           ))}
         </div>
       )}
+      {tool.diff && <MemoryDiff before={tool.diff.before} after={tool.diff.after} />}
+    </div>
+  )
+}
+
+/** Word-level diff of a memory edit: removed words struck through in red, added words in green. */
+export function wordDiff(before: string, after: string): Array<{ text: string; kind: 'same' | 'removed' | 'added' }> {
+  const tokens = (s: string): string[] => s.split(/(\s+|[.,;:!?()"])/).filter((w) => w !== '')
+  const a = tokens(before)
+  const b = tokens(after)
+  // longest common subsequence over words
+  const dp: number[][] = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0))
+  for (let i = a.length - 1; i >= 0; i--) for (let j = b.length - 1; j >= 0; j--) dp[i]![j] = a[i] === b[j] ? dp[i + 1]![j + 1]! + 1 : Math.max(dp[i + 1]![j]!, dp[i]![j + 1]!)
+  const out: Array<{ text: string; kind: 'same' | 'removed' | 'added' }> = []
+  let i = 0
+  let j = 0
+  const push = (text: string, kind: 'same' | 'removed' | 'added'): void => {
+    const last = out.at(-1)
+    if (last && last.kind === kind) last.text += text
+    else out.push({ text, kind })
+  }
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      push(a[i]!, 'same')
+      i++
+      j++
+    } else if (dp[i + 1]![j]! >= dp[i]![j + 1]!) push(a[i++]!, 'removed')
+    else push(b[j++]!, 'added')
+  }
+  while (i < a.length) push(a[i++]!, 'removed')
+  while (j < b.length) push(b[j++]!, 'added')
+  return out
+}
+
+function MemoryDiff({ before, after }: { before: string; after: string }) {
+  const parts = wordDiff(before, after)
+  return (
+    <div className="text-xs px-3 py-2 rounded-lg" style={{ background: T.surface, border: `1px solid ${T.border}`, maxWidth: 560, lineHeight: 1.6, wordBreak: 'break-word' }}>
+      {parts.map((p, i) =>
+        p.kind === 'same' ? (
+          <span key={i} style={{ color: T.text2 }}>
+            {p.text}
+          </span>
+        ) : p.kind === 'removed' ? (
+          <span key={i} style={{ color: T.red, background: T.redTint, textDecoration: 'line-through', borderRadius: 2 }}>
+            {p.text}
+          </span>
+        ) : (
+          <span key={i} style={{ color: T.green, background: 'rgba(74,222,128,.12)', borderRadius: 2 }}>
+            {p.text}
+          </span>
+        )
+      )}
     </div>
   )
 }

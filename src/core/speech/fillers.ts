@@ -5,6 +5,7 @@ const BY_TOOL: Record<string, string[]> = {
   recall: ['Let me think back.', 'One sec.'],
   search_history: ['Let me look through our earlier chats.'],
   remember: ['Got it, noting that down.'],
+  update_memory: ['Updating that.', 'Let me fix that note.'],
   default: ['Hold on.', 'One sec.', 'Let me check.']
 }
 
@@ -40,7 +41,8 @@ export function toolLabel(toolName: string): string {
       recall: 'Checking memory',
       search_history: 'Searching history',
       remember: 'Saving to memory',
-      forget: 'Forgetting',
+      update_memory: 'Updating memory',
+      forget: 'Asking to forget',
       current_time: 'Checking the time'
     }[toolName] ?? toolName
   )

@@ -599,6 +599,8 @@ export class Agent {
             m.tool.detail = described.detail
             m.tool.sources = described.sources
             m.tool.resultText = compactToolResult(output, settings.brain.toolResultKeepChars)
+            const o = output as { before?: unknown; after?: unknown } | null
+            if (o && typeof o.before === 'string' && typeof o.after === 'string') m.tool.diff = { before: o.before, after: o.after }
           } else m.tool.detail = error
           this.tr('turn.tool_end', { id, name, ok, ms: m.tool.endedAt - m.tool.startedAt, detail: m.tool.detail })
           this.upsert(m)
@@ -829,9 +831,11 @@ export class Agent {
     if (!p || p.id !== id) return
     this.pending = null
     if (accept) {
-      this.deps.store.upsert({ scopeId: GLOBAL_SCOPE, kind: p.kind, key: p.key, value: p.value, tags: p.tags, source: 'user' })
+      if (p.action === 'delete' && p.entryId !== undefined) this.deps.store.delete(p.entryId, 'user')
+      else this.deps.store.upsert({ scopeId: GLOBAL_SCOPE, kind: p.kind, key: p.key, value: p.value, tags: p.tags, source: 'user' })
       this.deps.emit({ type: 'memory-changed' })
     }
+    this.tr('memory.confirm', { action: p.action ?? 'save', key: p.key, accepted: accept })
     this.deps.emit({ type: 'memory-confirm', pending: null })
   }
 

@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite'
-import type { ChatMessage, MemoryEntry, MemoryKind, MemoryScope, Project, Session } from '@shared/types'
+import type { ChatMessage, MemoryEntry, MemoryHistoryEntry, MemoryKind, MemoryScope, MemorySnapshot, Project, Session } from '@shared/types'
 import { DEFAULT_TUNING } from '@shared/tuning'
 
 export const GLOBAL_SCOPE = 'global'
@@ -22,6 +22,10 @@ CREATE TRIGGER IF NOT EXISTS entries_ad AFTER DELETE ON entries BEGIN
 CREATE TRIGGER IF NOT EXISTS entries_au AFTER UPDATE ON entries BEGIN
   INSERT INTO entries_fts(entries_fts, rowid, key, value, tags) VALUES ('delete', old.id, old.key, old.value, old.tags);
   INSERT INTO entries_fts(rowid, key, value, tags) VALUES (new.id, new.key, new.value, new.tags); END;
+CREATE TABLE IF NOT EXISTS entry_history(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, entry_id INTEGER NOT NULL, before TEXT, after TEXT,
+  source TEXT NOT NULL, at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS entry_history_entry ON entry_history(entry_id, at);
 CREATE TABLE IF NOT EXISTS sessions(
   id TEXT PRIMARY KEY, title TEXT NOT NULL, project_id TEXT NOT NULL, created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS messages(
@@ -158,6 +162,22 @@ export class MemoryStore {
     return row ? toEntry(row) : undefined
   }
 
+  /** The entry with this key in a scope, case-insensitively. */
+  findByKey(scopeId: string, key: string): MemoryEntry | undefined {
+    const row = this.db.prepare('SELECT * FROM entries WHERE scope_id = ? AND lower(key) = lower(?)').get(scopeId, key) as EntryRow | undefined
+    return row ? toEntry(row) : undefined
+  }
+
+  private snapshot(e: MemoryEntry | undefined): MemorySnapshot | null {
+    return e ? { key: e.key, value: e.value, kind: e.kind, tags: e.tags } : null
+  }
+
+  private record(entryId: number, before: MemorySnapshot | null, after: MemorySnapshot | null, source: string): void {
+    this.db
+      .prepare('INSERT INTO entry_history(entry_id, before, after, source, at) VALUES (?, ?, ?, ?, ?)')
+      .run(entryId, before ? JSON.stringify(before) : null, after ? JSON.stringify(after) : null, source, Date.now())
+  }
+
   upsert(e: {
     id?: number
     scopeId: string
@@ -171,28 +191,93 @@ export class MemoryStore {
     const tags = (e.tags ?? []).map((t) => t.trim()).filter(Boolean).join(',')
     const kind = e.kind ?? 'fact'
     if (e.id) {
+      const before = this.snapshot(this.get(e.id))
       this.db
         .prepare('UPDATE entries SET scope_id = ?, kind = ?, key = ?, value = ?, tags = ?, updated_at = ? WHERE id = ?')
         .run(e.scopeId, kind, e.key, e.value, tags, now, e.id)
-      return this.get(e.id)!
+      const after = this.get(e.id)!
+      this.record(e.id, before, this.snapshot(after), e.source)
+      return after
     }
-    const existing = this.db
-      .prepare('SELECT id FROM entries WHERE scope_id = ? AND lower(key) = lower(?)')
-      .get(e.scopeId, e.key) as { id: number } | undefined
+    const existing = this.findByKey(e.scopeId, e.key)
     if (existing) {
       this.db
         .prepare('UPDATE entries SET kind = ?, value = ?, tags = ?, source = ?, updated_at = ? WHERE id = ?')
         .run(kind, e.value, tags, e.source, now, existing.id)
-      return this.get(existing.id)!
+      const after = this.get(existing.id)!
+      this.record(existing.id, this.snapshot(existing), this.snapshot(after), e.source)
+      return after
     }
     const res = this.db
       .prepare('INSERT INTO entries(scope_id, kind, key, value, tags, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
       .run(e.scopeId, kind, e.key, e.value, tags, e.source, now, now)
-    return this.get(Number(res.lastInsertRowid))!
+    const created = this.get(Number(res.lastInsertRowid))!
+    this.record(created.id, null, this.snapshot(created), e.source)
+    return created
   }
 
-  delete(id: number): void {
+  /** Edit an existing entry in place: replace the value, append to it, or substitute a phrase. */
+  update(id: number, patch: { value?: string; append?: string; replace?: { find: string; with: string }; tags?: string[]; key?: string; kind?: MemoryKind }, source: MemoryEntry['source']): { before: MemoryEntry; after: MemoryEntry } {
+    const before = this.get(id)
+    if (!before) throw new Error(`no memory entry #${id}`)
+    let value = before.value
+    if (patch.value !== undefined) value = patch.value
+    if (patch.replace) {
+      if (!value.includes(patch.replace.find)) throw new Error(`"${patch.replace.find}" is not in the current value`)
+      value = value.replace(patch.replace.find, patch.replace.with)
+    }
+    if (patch.append) value = `${value.trimEnd()}${/[.!?]$/.test(value.trimEnd()) ? '' : '.'} ${patch.append.trim()}`
+    const tags = patch.tags ?? before.tags
+    this.db
+      .prepare('UPDATE entries SET kind = ?, key = ?, value = ?, tags = ?, source = ?, updated_at = ? WHERE id = ?')
+      .run(patch.kind ?? before.kind, patch.key ?? before.key, value, tags.map((t) => t.trim()).filter(Boolean).join(','), source, Date.now(), id)
+    const after = this.get(id)!
+    this.record(id, this.snapshot(before), this.snapshot(after), source)
+    return { before, after }
+  }
+
+  delete(id: number, source: MemoryEntry['source'] = 'ui'): void {
+    const before = this.get(id)
     this.db.prepare('DELETE FROM entries WHERE id = ?').run(id)
+    if (before) this.record(id, this.snapshot(before), null, source)
+  }
+
+  history(entryId: number, limit = 20): MemoryHistoryEntry[] {
+    const rows = this.db.prepare('SELECT * FROM entry_history WHERE entry_id = ? ORDER BY at DESC, id DESC LIMIT ?').all(entryId, limit) as Array<{
+      id: number
+      entry_id: number
+      before: string | null
+      after: string | null
+      source: string
+      at: number
+    }>
+    return rows.map((r) => ({ id: r.id, entryId: r.entry_id, before: r.before ? (JSON.parse(r.before) as MemorySnapshot) : null, after: r.after ? (JSON.parse(r.after) as MemorySnapshot) : null, source: r.source, at: r.at }))
+  }
+
+  /** Put the entry back the way it was before the given history row (re-creating it if it was deleted). */
+  undo(historyId: number, scopeId?: string): MemoryEntry | undefined {
+    const row = this.db.prepare('SELECT * FROM entry_history WHERE id = ?').get(historyId) as { entry_id: number; before: string | null; after: string | null } | undefined
+    if (!row) return undefined
+    const before = row.before ? (JSON.parse(row.before) as MemorySnapshot) : null
+    const current = this.get(row.entry_id)
+    if (!before) {
+      // undoing a creation
+      if (current) this.delete(row.entry_id, 'ui')
+      return undefined
+    }
+    const tags = before.tags.join(',')
+    const now = Date.now()
+    if (current) {
+      this.db.prepare('UPDATE entries SET kind = ?, key = ?, value = ?, tags = ?, source = ?, updated_at = ? WHERE id = ?').run(before.kind, before.key, before.value, tags, 'ui', now, row.entry_id)
+    } else {
+      const scope = scopeId ?? GLOBAL_SCOPE
+      this.db
+        .prepare('INSERT INTO entries(id, scope_id, kind, key, value, tags, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(row.entry_id, scope, before.kind, before.key, before.value, tags, 'ui', now, now)
+    }
+    const after = this.get(row.entry_id)!
+    this.record(row.entry_id, this.snapshot(current), this.snapshot(after), 'ui')
+    return after
   }
 
   profile(scopeIds: string[], limit: number = DEFAULT_TUNING.memory.profileLimit): MemoryEntry[] {

@@ -67,7 +67,7 @@ const ABOUT_USER = `- About {user_name}: {about_user}`
 
 const MEMORY = `What you remember about {user_name}
 {memory}
-Treat these as facts unless the conversation contradicts them; they are also your best guide to what a mangled transcript was meant to say. They are hints from past sessions: use them if relevant, ignore them if not, and never read this block out loud or mention that it exists. Use the remember tool to save new stable preferences, facts or decisions the user states; never store guesses.`
+Treat these as facts unless the conversation contradicts them; they are also your best guide to what a mangled transcript was meant to say. They are hints from past sessions: use them if relevant, ignore them if not, and never read this block out loud or mention that it exists. Use the remember tool to save new stable preferences, facts or decisions the user states; never store guesses. To change or add detail to something already saved, use update_memory (append or replace) — never forget and re-save, and never delete anything the user did not ask to forget.`
 
 export function composeSystemPrompt(style: PromptStyle, ctx: PromptContext): string {
   const fill = (s: string): string =>

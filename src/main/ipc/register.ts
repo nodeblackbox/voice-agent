@@ -127,6 +127,12 @@ export function registerIpc(d: IpcDeps): void {
     d.win()?.webContents.send(IPC.event, { type: 'memory-changed' })
   })
   h(IPC.memoryConfirm, (_e, pendingId: string, accept: boolean) => d.agent.confirmPending(pendingId, accept))
+  h(IPC.memoryHistory, (_e, entryId: number) => d.store.history(entryId))
+  h(IPC.memoryUndo, (_e, historyId: number, scopeId?: string) => {
+    const entry = d.store.undo(historyId, scopeId)
+    d.win()?.webContents.send(IPC.event, { type: 'memory-changed' })
+    return entry
+  })
 
   h(IPC.projectsList, () => d.store.projects())
   h(IPC.projectsSave, (_e, project: Project) => {

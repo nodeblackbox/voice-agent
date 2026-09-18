@@ -74,6 +74,41 @@ describe('MemoryStore entries', () => {
     expect(store.relevant('why did we drop kokoro', [GLOBAL_SCOPE]).map((e) => e.key)).toEqual(['Kokoro note'])
   })
 
+  it('updates in place with append and replace, records history, and undoes', () => {
+    const e = store.upsert({ scopeId: GLOBAL_SCOPE, kind: 'decision', key: 'Karate AI', value: 'Uses SAM 3D to detect poses', source: 'agent' })
+    const r1 = store.update(e.id, { append: 'voice commands play matching segments' }, 'agent')
+    expect(r1.after.value).toBe('Uses SAM 3D to detect poses. voice commands play matching segments')
+    const r2 = store.update(e.id, { replace: { find: 'SAM 3D', with: 'SAM 3' }, tags: ['cv'] }, 'agent')
+    expect(r2.after.value).toContain('SAM 3 to detect')
+    expect(r2.after.tags).toEqual(['cv'])
+    expect(() => store.update(e.id, { replace: { find: 'nope', with: 'x' } }, 'agent')).toThrow(/not in the current value/)
+    const h = store.history(e.id)
+    expect(h.map((x) => [x.before?.value ?? null, x.after?.value ?? null])).toEqual([
+      ['Uses SAM 3D to detect poses. voice commands play matching segments', 'Uses SAM 3 to detect poses. voice commands play matching segments'],
+      ['Uses SAM 3D to detect poses', 'Uses SAM 3D to detect poses. voice commands play matching segments'],
+      [null, 'Uses SAM 3D to detect poses']
+    ])
+    const undone = store.undo(h[0]!.id)
+    expect(undone?.value).toBe('Uses SAM 3D to detect poses. voice commands play matching segments')
+    expect(undone?.tags).toEqual([])
+    // deleting keeps a snapshot, and undoing the delete brings the entry back with the same id
+    store.delete(e.id, 'agent')
+    expect(store.get(e.id)).toBeUndefined()
+    const del = store.history(e.id)[0]!
+    expect(del.after).toBeNull()
+    const back = store.undo(del.id)
+    expect(back?.id).toBe(e.id)
+    expect(back?.key).toBe('Karate AI')
+  })
+
+  it('remember over an existing key records the previous value', () => {
+    const a = store.upsert({ scopeId: GLOBAL_SCOPE, key: 'Coffee', value: 'flat white', source: 'agent' })
+    const b = store.upsert({ scopeId: GLOBAL_SCOPE, key: 'coffee', value: 'oat flat white', source: 'agent' })
+    expect(b.id).toBe(a.id)
+    expect(store.history(a.id)[0]).toMatchObject({ before: expect.objectContaining({ value: 'flat white' }), after: expect.objectContaining({ value: 'oat flat white' }) })
+    expect(store.findByKey(GLOBAL_SCOPE, 'COFFEE')?.id).toBe(a.id)
+  })
+
   it('deletes entries and projects (with their scope and entries)', () => {
     store.saveProject({ id: 'p1', name: 'Proj', createdAt: 1 })
     const e = store.upsert({ scopeId: 'p1', key: 'k', value: 'v', source: 'ui' })

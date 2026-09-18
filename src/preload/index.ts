@@ -53,7 +53,9 @@ const api: VoiceAgentApi = {
     list: (scopeId, query) => invoke(IPC.memoryList, scopeId, query),
     upsert: (entry) => invoke(IPC.memoryUpsert, entry),
     delete: (id) => invoke(IPC.memoryDelete, id),
-    confirm: (pendingId, accept) => invoke(IPC.memoryConfirm, pendingId, accept)
+    confirm: (pendingId, accept) => invoke(IPC.memoryConfirm, pendingId, accept),
+    history: (entryId) => invoke(IPC.memoryHistory, entryId),
+    undo: (historyId, scopeId) => invoke(IPC.memoryUndo, historyId, scopeId)
   },
   projects: {
     list: () => invoke(IPC.projectsList),

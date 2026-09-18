@@ -208,12 +208,11 @@ function MemoryConfirmChip() {
   const pending = useStore((s) => s.pendingSave)
   if (!pending) return null
   const answer = (accept: boolean) => void window.api.memory.confirm(pending.id, accept)
+  const deleting = pending.action === 'delete'
   return (
-    <div className="self-start inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs va-fade" style={{ background: T.amberTint, color: T.amber }}>
+    <div className="self-start inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs va-fade" style={{ background: deleting ? T.redTint : T.amberTint, color: deleting ? T.red : T.amber }}>
       <Brain size={12} />
-      <span>
-        Save "{pending.key}" as {pending.kind}?
-      </span>
+      <span>{deleting ? `Forget "${pending.key}"?` : `Save "${pending.key}" as ${pending.kind}?`}</span>
       <span style={{ color: T.text2 }}>{pending.value}</span>
       <button className="underline" style={{ background: 'none', border: 'none', color: T.amber, cursor: 'pointer', padding: 0 }} onClick={() => answer(true)}>
         Yes

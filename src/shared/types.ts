@@ -77,6 +77,8 @@ export interface ToolActivity {
   input?: unknown
   /** Compacted result text kept in history for later turns (see brain.toolResultKeepChars). */
   resultText?: string
+  /** Before/after of a memory edit, shown as a diff under the pill. */
+  diff?: { before: string; after: string }
 }
 
 export interface TurnMetrics {
@@ -239,6 +241,26 @@ export interface Project {
 
 export interface PendingMemorySave {
   id: string
+  key: string
+  value: string
+  kind: MemoryKind
+  tags: string[]
+  /** `delete` asks before forgetting an existing entry (`entryId`). */
+  action?: 'save' | 'delete'
+  entryId?: number
+}
+
+/** One change to a memory entry; `before`/`after` are JSON snapshots ({key, value, kind, tags}) or null for create/delete. */
+export interface MemoryHistoryEntry {
+  id: number
+  entryId: number
+  before: MemorySnapshot | null
+  after: MemorySnapshot | null
+  source: string
+  at: number
+}
+
+export interface MemorySnapshot {
   key: string
   value: string
   kind: MemoryKind

@@ -11,6 +11,7 @@ import type {
   Skill,
   StyleDraft,
   MemoryEntry,
+  MemoryHistoryEntry,
   MemoryScope,
   ModelInfo,
   Project,
@@ -76,6 +77,9 @@ export interface VoiceAgentApi {
     upsert(entry: Partial<MemoryEntry> & { scopeId: string; key: string; value: string }): Promise<MemoryEntry>
     delete(id: number): Promise<void>
     confirm(pendingId: string, accept: boolean): Promise<void>
+    history(entryId: number): Promise<MemoryHistoryEntry[]>
+    /** Restore the entry to its state before that history row (re-creating it in `scopeId` if it was deleted). */
+    undo(historyId: number, scopeId?: string): Promise<MemoryEntry | undefined>
   }
   projects: {
     list(): Promise<Project[]>

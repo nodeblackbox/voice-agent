@@ -4,7 +4,7 @@ export function toolKind(name: string): ToolActivity['kind'] {
   if (name.startsWith('mcp__')) return 'mcp'
   if (name === 'web_search' || name === 'research') return 'search'
   if (name === 'read_page') return 'read'
-  if (name === 'remember' || name === 'recall' || name === 'forget' || name === 'search_history') return 'memory'
+  if (name === 'remember' || name === 'recall' || name === 'forget' || name === 'search_history' || name === 'update_memory') return 'memory'
   if (name === 'current_time') return 'time'
   return 'other'
 }
@@ -30,6 +30,10 @@ export function describeInput(name: string, input: unknown): string {
       return typeof i.url === 'string' ? i.url : ''
     case 'remember':
       return typeof i.key === 'string' ? `${i.key}: ${str(i.value, 60)}` : ''
+    case 'update_memory': {
+      const what = i.append !== undefined ? `append ${str(i.append, 50)}` : i.replace ? `replace ${str((i.replace as { find?: unknown }).find, 30)}` : i.value !== undefined ? `rewrite` : 'edit'
+      return `${typeof i.key === 'string' ? i.key : i.id !== undefined ? `#${String(i.id)}` : ''} · ${what}`
+    }
     case 'recall':
     case 'search_history':
       return typeof i.query === 'string' ? `“${i.query}”` : ''
@@ -75,17 +79,20 @@ export function describeOutput(name: string, output: unknown): { detail?: string
       const r = o as { title?: string; url?: string; text?: string } | undefined
       return r?.url ? { detail: `${(r.text?.length ?? 0).toLocaleString()} chars`, sources: [{ title: r.title || host(r.url), url: r.url }] } : {}
     }
-    case 'remember': {
+    case 'remember':
+    case 'update_memory': {
       const s = (o as { status?: string })?.status
-      return { detail: s === 'saved' ? 'saved' : s === 'pending' ? 'waiting for your OK' : s }
+      return { detail: s === 'saved' ? 'saved' : s === 'updated' ? 'updated' : s === 'pending' ? 'waiting for your OK' : s === 'not_found' ? 'no such memory' : s === 'no_change' ? 'nothing to change' : s }
     }
     case 'recall':
     case 'search_history': {
       const n = Array.isArray(o) ? o.length : 0
       return { detail: n ? `${n} match${n === 1 ? '' : 'es'}` : 'nothing found' }
     }
-    case 'forget':
-      return { detail: (o as { status?: string })?.status }
+    case 'forget': {
+      const s = (o as { status?: string })?.status
+      return { detail: s === 'pending' ? 'waiting for your OK' : s }
+    }
     case 'current_time':
       return { detail: (o as { now?: string })?.now }
     default:

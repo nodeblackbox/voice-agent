@@ -56,6 +56,7 @@ describe('composeSystemPrompt', () => {
     expect(p).toContain('never read this block out loud')
     // bookkeeping and fragments
     expect(p).toContain('Never write square-bracket notes yourself')
+    expect(p).toContain('use update_memory (append or replace)')
     expect(p).toContain('unfinished fragment')
     expect(p).toContain('Never fake enthusiasm ("Great question!"')
   })

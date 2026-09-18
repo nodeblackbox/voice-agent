@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { BookOpen, Check, Pencil, Plus, Search, Tag as TagIcon, Trash2, X } from 'lucide-react'
-import type { MemoryEntry, MemoryKind, MemoryScope } from '@shared/types'
+import { BookOpen, Check, History, Pencil, Plus, RotateCcw, Search, Tag as TagIcon, Trash2, X } from 'lucide-react'
+import type { MemoryEntry, MemoryHistoryEntry, MemoryKind, MemoryScope } from '@shared/types'
 import { T } from '../theme'
 import { useStore } from '../state/store'
 import { Btn, Card, Empty, IconBtn, Page, Select, Tag, TextInput } from '../components/primitives'
@@ -21,6 +21,52 @@ interface Form {
 }
 
 const emptyForm = (): Form => ({ key: '', value: '', kind: 'fact', tags: '' })
+
+const when = (ms: number): string => new Date(ms).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
+
+function HistoryList({ entryId, scopeId, onChanged }: { entryId: number; scopeId: string; onChanged: () => void }) {
+  const [rows, setRows] = useState<MemoryHistoryEntry[] | null>(null)
+  const load = useCallback(async () => setRows(await window.api.memory.history(entryId)), [entryId])
+  useEffect(() => {
+    void load()
+  }, [load])
+  if (!rows) return null
+  if (!rows.length) return <Empty>No history for this entry.</Empty>
+  return (
+    <div className="flex flex-col gap-1 px-4 pb-3">
+      {rows.map((h) => (
+        <div key={h.id} className="flex items-start gap-3 text-xs py-1.5" style={{ borderTop: `1px solid ${T.border}` }}>
+          <span style={{ color: T.text3, fontFamily: T.mono, width: 120, flexShrink: 0 }}>
+            {when(h.at)}
+            <br />
+            {h.source}
+          </span>
+          <span className="flex-1 min-w-0" style={{ lineHeight: 1.5 }}>
+            {h.before ? (
+              <span style={{ color: T.red, textDecoration: 'line-through', wordBreak: 'break-word' }}>{h.before.value}</span>
+            ) : (
+              <span style={{ color: T.text3 }}>(created)</span>
+            )}
+            <br />
+            {h.after ? <span style={{ color: T.green, wordBreak: 'break-word' }}>{h.after.value}</span> : <span style={{ color: T.text3 }}>(deleted)</span>}
+          </span>
+          <Btn
+            small
+            icon={RotateCcw}
+            onClick={() => {
+              void window.api.memory.undo(h.id, scopeId).then(() => {
+                onChanged()
+                void load()
+              })
+            }}
+          >
+            Undo
+          </Btn>
+        </div>
+      ))}
+    </div>
+  )
+}
 
 function EntryForm({ initial, onSave, onCancel }: { initial: Form; onSave: (f: Form) => void; onCancel: () => void }) {
   const [f, setF] = useState<Form>(initial)
@@ -53,6 +99,7 @@ export function MemoryView() {
   const [q, setQ] = useState('')
   const [entries, setEntries] = useState<MemoryEntry[]>([])
   const [editing, setEditing] = useState<Form | null>(null)
+  const [historyFor, setHistoryFor] = useState<number | null>(null)
 
   const load = useCallback(async () => {
     const s = await window.api.memory.scopes()
@@ -88,7 +135,9 @@ export function MemoryView() {
 
   const remove = async (id: number) => {
     await window.api.memory.delete(id)
+    setHistoryFor(null)
     await load()
+    pushToast('info', 'Deleted. A deleted entry can be restored from the history of any entry that changed it, or by undoing in the Memory tool pill.')
   }
 
   const scopeName = scopes.find((s) => s.id === scopeId)?.name ?? scopeId
@@ -137,35 +186,39 @@ export function MemoryView() {
               editing?.id === e.id ? (
                 <EntryForm key={e.id} initial={editing} onSave={(f) => void save(f)} onCancel={() => setEditing(null)} />
               ) : (
-                <div key={e.id} className="flex items-start gap-3 px-4 py-3" style={{ borderBottom: i < entries.length - 1 ? `1px solid ${T.border}` : 'none' }}>
-                  <div className="flex flex-col gap-0.5 flex-1 min-w-0">
-                    <span className="text-xs" style={{ color: T.text3 }}>
-                      {e.key}
-                      <span style={{ fontFamily: T.mono }}> · {e.kind}</span>
-                    </span>
-                    <span className="text-sm" style={{ wordBreak: 'break-word' }}>
-                      {e.value}
-                    </span>
+                <div key={e.id} style={{ borderBottom: i < entries.length - 1 ? `1px solid ${T.border}` : 'none' }}>
+                  <div className="flex items-start gap-3 px-4 py-3">
+                    <div className="flex flex-col gap-0.5 flex-1 min-w-0">
+                      <span className="text-xs" style={{ color: T.text3 }}>
+                        {e.key}
+                        <span style={{ fontFamily: T.mono }}> · {e.kind}</span>
+                      </span>
+                      <span className="text-sm" style={{ wordBreak: 'break-word' }}>
+                        {e.value}
+                      </span>
+                    </div>
+                    <div className="flex gap-1 items-center flex-wrap justify-end" style={{ maxWidth: 220 }}>
+                      {e.tags.map((t) => (
+                        <Tag key={t}>
+                          <TagIcon size={9} />
+                          {t}
+                        </Tag>
+                      ))}
+                      <Tag>{e.source}</Tag>
+                    </div>
+                    <div className="flex gap-0.5">
+                      <IconBtn icon={History} label="History" size={13} w={26} active={historyFor === e.id} onClick={() => setHistoryFor(historyFor === e.id ? null : e.id)} />
+                      <IconBtn
+                        icon={Pencil}
+                        label="Edit"
+                        size={13}
+                        w={26}
+                        onClick={() => setEditing({ id: e.id, key: e.key, value: e.value, kind: e.kind, tags: e.tags.join(', ') })}
+                      />
+                      <IconBtn icon={Trash2} label="Delete" size={13} w={26} onClick={() => void remove(e.id)} />
+                    </div>
                   </div>
-                  <div className="flex gap-1 items-center flex-wrap justify-end" style={{ maxWidth: 220 }}>
-                    {e.tags.map((t) => (
-                      <Tag key={t}>
-                        <TagIcon size={9} />
-                        {t}
-                      </Tag>
-                    ))}
-                    <Tag>{e.source}</Tag>
-                  </div>
-                  <div className="flex gap-0.5">
-                    <IconBtn
-                      icon={Pencil}
-                      label="Edit"
-                      size={13}
-                      w={26}
-                      onClick={() => setEditing({ id: e.id, key: e.key, value: e.value, kind: e.kind, tags: e.tags.join(', ') })}
-                    />
-                    <IconBtn icon={Trash2} label="Delete" size={13} w={26} onClick={() => void remove(e.id)} />
-                  </div>
+                  {historyFor === e.id && <HistoryList entryId={e.id} scopeId={scopeId} onChanged={() => void load()} />}
                 </div>
               )
             )}
