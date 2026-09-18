@@ -7,6 +7,7 @@ import type { AudioChunk, ModelInfo } from '@shared/types'
 import { DEFAULT_TUNING } from '@shared/tuning'
 import { TurnRunner, type RunnerDeps } from './runner'
 import { Speaker } from '../speech/speaker'
+import { CONTINUATION, STEP_LIMIT_PHRASE } from '../speech/fillers'
 import type { ModelFactory } from '../providers/factory'
 import { findModel } from '../providers/models'
 
@@ -77,6 +78,7 @@ function harness(models: Record<string, MockLanguageModelV4>, over: Partial<Runn
     format: 'plain',
     speaker,
     speech: DEFAULT_TUNING.speech,
+    brain: { ...DEFAULT_TUNING.brain, retryBackoffMs: 0 },
     fillerEnabled: true,
     firstTokenTimeoutMs: 2000,
     stallTimeoutMs: 2000,
@@ -161,6 +163,7 @@ describe('TurnRunner', () => {
     expect(r.text).toBe('Fallback.')
     expect(r.modelUsed).toBe('groq:openai/gpt-oss-20b')
     expect(h.deps.onNotice).toHaveBeenCalledWith(expect.stringContaining("isn't responding"))
+    expect(vi.mocked(h.deps.onMetrics).mock.calls[0]![0]).toMatchObject({ fallbackUsed: true })
   })
 
   it('does not retry non-transient errors', async () => {
@@ -176,6 +179,41 @@ describe('TurnRunner', () => {
     h.controller.abort()
     const r = await h.run()
     expect(r.aborted).toBe(true)
+  })
+
+  it('speaks a lead-in per tool call but not more often than fillerMinGapMs', async () => {
+    const calc = tool({ description: 'add', inputSchema: z.object({ a: z.number(), b: z.number() }), execute: async ({ a, b }) => ({ sum: a + b }) })
+    const streams = [toolCallStream('calc', { a: 1, b: 1 }), toolCallStream('calc', { a: 2, b: 2 }), textStream(['Done.'])]
+    const gapped = harness({ 'anthropic:claude-haiku-4-5': mockModel(streams) }, { tools: { calc }, speech: { ...DEFAULT_TUNING.speech, fillerMinGapMs: 60_000 } })
+    await gapped.run()
+    expect(gapped.chunks.filter((c) => c.kind === 'filler')).toHaveLength(1)
+    const eager = harness({ 'anthropic:claude-haiku-4-5': mockModel(streams) }, { tools: { calc }, speech: { ...DEFAULT_TUNING.speech, fillerMinGapMs: 0 } })
+    await eager.run()
+    expect(eager.chunks.filter((c) => c.kind === 'filler')).toHaveLength(2)
+  })
+
+  it('says a continuation filler when a tool stays quiet past fillerAfterMs', async () => {
+    const slow = tool({
+      description: 'slow',
+      inputSchema: z.object({}),
+      execute: () => new Promise((r) => setTimeout(() => r({ ok: true }), 1800))
+    })
+    const h = harness({ 'anthropic:claude-haiku-4-5': mockModel([toolCallStream('slow', {}), textStream(['Finally.'])]) }, { tools: { slow }, speech: { ...DEFAULT_TUNING.speech, fillerAfterMs: 100 } })
+    await h.run()
+    const fillers = h.chunks.filter((c) => c.kind === 'filler').map((c) => c.text)
+    expect(fillers).toHaveLength(2)
+    expect(CONTINUATION).toContain(fillers[1])
+    expect(h.speaker.fillers).toBe(2)
+  }, 10_000)
+
+  it('says so out loud when the tool round cap is hit', async () => {
+    const calc = tool({ description: 'add', inputSchema: z.object({ a: z.number(), b: z.number() }), execute: async ({ a, b }) => ({ sum: a + b }) })
+    const h = harness({ 'anthropic:claude-haiku-4-5': mockModel([toolCallStream('calc', { a: 1, b: 2 })]) }, { tools: { calc }, maxSteps: 2, fillerEnabled: false })
+    const r = await h.run()
+    expect(r.hitStepLimit).toBe(true)
+    expect(r.text).toContain(STEP_LIMIT_PHRASE)
+    expect(h.chunks.filter((c) => c.text).map((c) => c.text)).toEqual([STEP_LIMIT_PHRASE])
+    expect(vi.mocked(h.deps.onMetrics).mock.calls[0]![0]).toMatchObject({ steps: 2, hitStepLimit: true })
   })
 
   it('treats a stall before the first token as a timeout that triggers fallback', async () => {

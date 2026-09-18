@@ -256,6 +256,7 @@ function ContextSection() {
   const updateSettings = useStore((s) => s.updateSettings)
   const [agentName, setAgentName] = useState(settings?.agentName ?? '')
   const [userName, setUserName] = useState(settings?.userName ?? '')
+  const [aboutUser, setAboutUser] = useState(settings?.aboutUser ?? '')
   const [manual, setManual] = useState(settings?.location.manual ?? '')
   if (!settings) return null
   const loc = settings.location
@@ -300,6 +301,20 @@ function ContextSection() {
             <span className="flex items-center gap-2">
               <TextInput value={userName} onChange={setUserName} style={{ width: 160 }} />
               {userName !== settings.userName && <Btn small primary icon={Check} onClick={() => void updateSettings({ userName })} />}
+            </span>
+          </Row>
+          <Row label="About you" sub="One line the assistant always knows, e.g. “technical, prefers direct answers over hedging”">
+            <span className="flex items-center gap-2">
+              <TextInput
+                value={aboutUser}
+                onChange={setAboutUser}
+                placeholder="optional"
+                style={{ width: 300 }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void updateSettings({ aboutUser })
+                }}
+              />
+              {aboutUser !== settings.aboutUser && <Btn small primary icon={Check} onClick={() => void updateSettings({ aboutUser })} />}
             </span>
           </Row>
         </div>

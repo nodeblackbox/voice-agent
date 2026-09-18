@@ -40,6 +40,28 @@ describe('composeSystemPrompt', () => {
     expect(composeSystemPrompt(style('short'), { ...ctx, fillerEnabled: false })).toContain('say in a few words what you are doing')
   })
 
+  it('carries the conversational rules the voice agent depends on', () => {
+    const p = composeSystemPrompt(style('balanced'), ctx)
+    // answer-first applies to every style, not only Short
+    expect(p).toContain('Answer first, in one or two short sentences')
+    expect(p).toContain('say what you are about to do in one sentence, then do it')
+    // interruption note semantics
+    expect(p).toContain('the user heard only the text before the note')
+    expect(p).toContain('continue from where you were cut, briefly')
+    // search economy
+    expect(p).toContain('one web_search plus at most one read_page usually answers')
+    expect(p).toContain('do not re-search to double-check')
+    expect(p).toContain('rather than trying the same page again')
+    // memory hints are never spoken
+    expect(p).toContain('never read this block out loud')
+    expect(p).toContain('Never fake enthusiasm ("Great question!"')
+  })
+
+  it('adds the about-user line only when set', () => {
+    expect(composeSystemPrompt(style('short'), ctx)).not.toContain('About Sam')
+    expect(composeSystemPrompt(style('short'), { ...ctx, aboutUser: 'technical, likes direct answers' })).toContain('- About Sam: technical, likes direct answers')
+  })
+
   it('omits tool, memory and skill sections when empty', () => {
     const p = composeSystemPrompt(style('balanced'), { ...ctx, toolNames: [], memoryBlock: '', skillsBlock: '' })
     expect(p).not.toContain('Tools')

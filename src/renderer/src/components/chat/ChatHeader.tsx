@@ -28,7 +28,8 @@ export function ChatHeader() {
   const runningTool = [...messages].reverse().find((m) => m.role === 'tool' && m.tool?.status === 'running')
   const toolLabel = runningTool?.tool?.label ?? null
   const toolSummary = runningTool?.tool?.summary ?? null
-  const ttfa = lastMetrics?.ttfaMs ?? lastMetrics?.ttftMs
+  const ttfa = lastMetrics?.speechEndToAudioMs ?? lastMetrics?.ttfaMs ?? lastMetrics?.ttftMs
+  const ttfaTitle = lastMetrics?.speechEndToAudioMs !== undefined ? 'end of your speech to first audio' : 'time to first audio'
   const tokens = lastMetrics?.inputTokens !== undefined && lastMetrics?.outputTokens !== undefined ? lastMetrics : null
 
   return (
@@ -56,7 +57,7 @@ export function ChatHeader() {
           {friendlyVoice(settings?.voice.voice)}
         </span>
         {ttfa !== undefined && (
-          <span className="text-xs mr-1" style={{ color: T.text3, fontFamily: T.mono }} title="time to first audio">
+          <span className="text-xs mr-1" style={{ color: T.text3, fontFamily: T.mono }} title={ttfaTitle}>
             {Math.round(ttfa)}ms
           </span>
         )}

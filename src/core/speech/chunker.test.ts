@@ -60,4 +60,23 @@ describe('SentenceChunker', () => {
     const c = new SentenceChunker()
     expect(c.feed('Wait… really?! Yes.')).toEqual(['Wait…', 'really?!'])
   })
+
+  it('does not split after titles, initials or latin abbreviations', () => {
+    const c = new SentenceChunker(220, 0)
+    expect(c.feed('Dr. Smith met J. K. Rowling, e.g. at Mt. Fuji vs. the U.S. team. Then they left. ')).toEqual([
+      'Dr. Smith met J. K. Rowling, e.g. at Mt. Fuji vs. the U.S. team.',
+      'Then they left.'
+    ])
+  })
+
+  it('still ends a sentence on a one-word answer that looks like an abbreviation', () => {
+    const c = new SentenceChunker(220, 0)
+    expect(c.feed('No. I do not think so. ')).toEqual(['No.', 'I do not think so.'])
+  })
+
+  it('keeps decimals together', () => {
+    const c = new SentenceChunker(220, 0)
+    expect(c.feed('It costs 2.')).toEqual([])
+    expect(c.feed('5 dollars. Cheap. ')).toEqual(['It costs 2.5 dollars.', 'Cheap.'])
+  })
 })

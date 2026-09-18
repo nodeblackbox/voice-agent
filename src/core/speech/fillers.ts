@@ -8,12 +8,23 @@ const BY_TOOL: Record<string, string[]> = {
   default: ['Hold on.', 'One sec.', 'Let me check.']
 }
 
+/** Spoken while a tool has been quiet for a while, so the agent never goes dead silent mid-work. */
+export const CONTINUATION = ['Still looking.', 'One sec.', 'Almost there.', 'Bear with me.']
+
+/** Spoken when the tool-round cap is hit instead of ending the turn silently. */
+export const STEP_LIMIT_PHRASE = "I've dug through several pages and I'm going in circles. Here's what I have so far."
+
 let counter = 0
+let continuationCounter = 0
 
 export function fillerFor(toolName: string): string {
   const key = toolName.startsWith('mcp__') ? 'default' : toolName
   const options = BY_TOOL[key] ?? BY_TOOL.default!
   return options[counter++ % options.length]!
+}
+
+export function continuationFiller(): string {
+  return CONTINUATION[continuationCounter++ % CONTINUATION.length]!
 }
 
 export function toolLabel(toolName: string): string {

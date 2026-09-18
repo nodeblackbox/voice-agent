@@ -17,6 +17,7 @@ export const DEFAULT_SETTINGS: Settings = {
   projectId: 'global',
   agentName: 'Ava',
   userName: 'the user',
+  aboutUser: '',
   voice: { engine: 'edge', voice: 'en-US-AvaNeural', rate: 1.0, pitch: 0 },
   audio: {},
   ...defaultTuning(),

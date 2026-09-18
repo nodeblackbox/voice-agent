@@ -258,17 +258,19 @@ export class MemoryStore {
     return rows.map((r) => JSON.parse(r.json) as ChatMessage)
   }
 
-  searchHistory(query: string, excludeSessionId: string | null, limit = 8): Array<{ text: string; role: string; createdAt: number; sessionTitle: string }> {
+  /** Past messages matching `query`, other sessions only. `minScore` is a floor on |bm25| (0 = off). */
+  searchHistory(query: string, excludeSessionId: string | null, limit = 8, minScore = 0): Array<{ text: string; role: string; createdAt: number; sessionTitle: string }> {
     const q = ftsQuery(query)
-    if (!q) return []
+    if (!q || limit <= 0) return []
     const rows = this.db
       .prepare(
         `SELECT m.text, m.role, m.created_at, s.title FROM messages_fts f
          JOIN messages m ON m.rowid = f.rowid JOIN sessions s ON s.id = m.session_id
-         WHERE messages_fts MATCH ? AND m.role != 'tool' AND (? IS NULL OR m.session_id != ?)
+         WHERE messages_fts MATCH ? AND m.role IN ('user', 'assistant') AND (? IS NULL OR m.session_id != ?)
+           AND (? <= 0 OR -bm25(messages_fts) >= ?)
          ORDER BY bm25(messages_fts) LIMIT ?`
       )
-      .all(q, excludeSessionId, excludeSessionId, limit) as Array<{ text: string; role: string; created_at: number; title: string }>
+      .all(q, excludeSessionId, excludeSessionId, minScore, minScore, limit) as Array<{ text: string; role: string; created_at: number; title: string }>
     return rows.map((r) => ({ text: r.text, role: r.role, createdAt: r.created_at, sessionTitle: r.title }))
   }
 }

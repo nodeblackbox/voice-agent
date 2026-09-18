@@ -127,10 +127,10 @@ app.whenReady().then(async () => {
           agent.onPartial(evt.text)
           break
         case 'speech_end':
-          agent.onSpeechEnd()
+          agent.onSpeechEnd({ reason: evt.reason, silenceMs: evt.silenceMs, turnP: evt.turnP, speechMs: evt.speechMs })
           break
         case 'final':
-          agent.onFinal(evt.text, evt.asrMs, { afterCut: evt.afterCut === true, durationMs: evt.durationMs })
+          agent.onFinal(evt.text, evt.asrMs, { afterCut: evt.afterCut === true, durationMs: evt.durationMs, queuedMs: evt.queuedMs })
           break
         case 'bargein':
           agent.onBargeIn(evt.stage)
@@ -269,7 +269,7 @@ app.whenReady().then(async () => {
   })
 
   app.on('before-quit', () => {
-    agent.cancel()
+    agent.shutdown()
     sidecar.stop()
     searxng.stop()
     void mcp.stop()

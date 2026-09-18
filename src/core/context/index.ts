@@ -19,6 +19,23 @@ export function timeContext(): TimeContext {
   return { now, timezone }
 }
 
+/** "just now", "5 min ago", "3 h ago", "yesterday", "4 days ago", "3 weeks ago", "2 months ago". */
+export function relativeTime(then: number, now = Date.now()): string {
+  const s = Math.max(0, Math.round((now - then) / 1000))
+  if (s < 60) return 'just now'
+  const m = Math.round(s / 60)
+  if (m < 60) return `${m} min ago`
+  const h = Math.round(m / 60)
+  if (h < 24) return `${h} h ago`
+  const d = Math.round(h / 24)
+  if (d === 1) return 'yesterday'
+  if (d < 14) return `${d} days ago`
+  const w = Math.round(d / 7)
+  if (w < 9) return `${w} weeks ago`
+  const mo = Math.round(d / 30)
+  return mo < 12 ? `${mo} months ago` : `${Math.round(d / 365)} years ago`
+}
+
 const IP_TTL_MS = 60 * 60 * 1000
 
 export class LocationProvider {

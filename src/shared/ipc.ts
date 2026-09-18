@@ -52,6 +52,7 @@ export const IPC = {
   audioFrame: 'audio:frame',
   playbackStarted: 'playback:started',
   playbackFinished: 'playback:finished',
+  playbackCancelled: 'playback:cancelled',
   playbackDrained: 'playback:drained',
 
   // main -> renderer

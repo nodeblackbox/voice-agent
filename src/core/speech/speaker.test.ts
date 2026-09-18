@@ -47,7 +47,7 @@ describe('Speaker', () => {
   it('emits a terminal marker when nothing was said', async () => {
     const { speaker, chunks } = make()
     await speaker.finish()
-    expect(chunks).toEqual([{ turnId: 'turn-1', seq: 0, text: '', mp3: new ArrayBuffer(0), last: true }])
+    expect(chunks).toEqual([{ turnId: 'turn-1', seq: 0, text: '', kind: 'speech', mp3: new ArrayBuffer(0), last: true }])
   })
 
   it('ignores empty text and text after finish or in silent mode', async () => {
@@ -89,6 +89,32 @@ describe('Speaker', () => {
     expect(spoken.map((c) => c.text)).toEqual(['Three.', 'Four.'])
     for (const c of spoken) expect(c.mp3.byteLength).toBe(0)
     expect(chunks.at(-1)?.last).toBe(true)
+  })
+
+  it('marks fillers, counts them, and tracks first-sentence synthesis timings', async () => {
+    const { speaker, chunks } = make({
+      engine: engine(async (req) => {
+        req.onFirstByte?.(7)
+        return Buffer.from(`mp3:${req.text}`)
+      })
+    })
+    speaker.say('Let me check.', 'filler')
+    speaker.say('Real answer here.')
+    await speaker.finish()
+    expect(chunks.filter((c) => c.text).map((c) => c.kind)).toEqual(['filler', 'speech'])
+    expect(speaker.fillers).toBe(1)
+    expect(speaker.firstSynthMs).toBeGreaterThanOrEqual(0)
+    expect(speaker.firstByteMs).toBe(7)
+  })
+
+  it('estimates how long emitted audio keeps it busy', async () => {
+    const { speaker } = make()
+    expect(speaker.isIdle()).toBe(true)
+    speaker.say('x'.repeat(150)) // ~10 s of speech at 15 chars/s
+    await speaker.finish()
+    expect(speaker.isIdle()).toBe(false)
+    expect(speaker.busyForMs()).toBeGreaterThan(8000)
+    expect(speaker.isIdle(performance.now() + 11_000)).toBe(true)
   })
 
   it('stops emitting once aborted and resolves finish', async () => {

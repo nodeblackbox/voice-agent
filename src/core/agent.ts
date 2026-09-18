@@ -1,4 +1,4 @@
-import type { ModelMessage, ToolSet } from 'ai'
+import type { ToolSet } from 'ai'
 import type {
   AgentEvent,
   AudioChunk,
@@ -7,12 +7,13 @@ import type {
   PendingMemorySave,
   PromptStyle,
   Session,
+  SessionSummary,
   Settings,
   Skill,
   TurnMetrics
 } from '@shared/types'
 import { GLOBAL_SCOPE, type MemoryStore } from './memory/store'
-import { LocationProvider, timeContext } from './context'
+import { LocationProvider, relativeTime, timeContext } from './context'
 import { composeSystemPrompt } from './prompts/compose'
 import { BUILTIN_STYLES, DEFAULT_STYLE_ID } from './prompts/styles'
 import { SpeakableFilter } from './prompts/speakable'
@@ -24,13 +25,16 @@ import { toolLabel } from './speech/fillers'
 import { describeInput, describeOutput, mcpServerOf, toolKind } from './tools/describe'
 import { skillsBlock } from './prompts/skills'
 import { Speaker } from './speech/speaker'
-import { EdgeTtsEngine, SystemTtsEngine, type TtsEngine } from './speech/tts'
+import { EdgeTtsEngine, SystemTtsEngine, edgeTtsStats, type TtsEngine } from './speech/tts'
 import { currentTimeTool } from './tools/time'
 import { memoryTools } from './tools/memory'
 import { searchTools, type SearchDeps } from './tools/search'
 import { mcpTools, type McpBridge } from './tools/mcp-adapter'
 import { StateMachine } from './turn/state-machine'
 import { TurnRunner } from './turn/runner'
+import { buildModelMessages, compactToolResult } from './turn/history'
+import { splitSpoken, type CutPoint, type SpokenChunk } from './turn/spoken'
+import { summarize } from './metrics/summary'
 import type { Trace } from './trace'
 
 export interface EarsControl {
@@ -54,16 +58,27 @@ export interface AgentDeps {
   trace: Trace
 }
 
+export interface SpeechEndInfo {
+  reason: 'done' | 'timeout'
+  silenceMs: number
+  turnP: number | null
+  speechMs?: number
+}
+
 interface ActiveTurn {
   id: string
   controller: AbortController
   assistant: ChatMessage | null
-  chunkText: Map<number, string>
+  chunks: Map<number, SpokenChunk>
   startedSeqs: Set<number>
+  finishedSeqs: Set<number>
   speaker: Speaker
   llmDone: boolean
   drained: boolean
   startedAt: number
+  /** Wall-clock moment the ears closed the user's turn (voice turns only). */
+  speechEndAt?: number
+  ttsDroppedBefore: number
 }
 
 const words = (s: string): string[] => s.toLowerCase().match(/[a-z0-9']+/g) ?? []
@@ -77,6 +92,8 @@ export function wordOverlap(a: string, b: string): number {
   return wa.filter((w) => wb.has(w)).length / wa.length
 }
 
+const clip = (s: string, max: number): string => (s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s)
+
 export class Agent {
   readonly sm: StateMachine
   private factory: ModelFactory
@@ -86,10 +103,13 @@ export class Agent {
   private sessionId = ''
   private messages: ChatMessage[] = []
   private turn: ActiveTurn | null = null
+  /** The last cancelled turn, kept until the renderer reports where the cut landed. */
+  private cancelled: { turn: ActiveTurn; assistant: ChatMessage } | null = null
   private readTurn: { id: string; controller: AbortController } | null = null
   private pending: PendingMemorySave | null = null
   private micOn = false
   private lastSpokenText = ''
+  private lastSpeechEnd: (SpeechEndInfo & { at: number }) | null = null
   selfCutSuspects = 0
 
   constructor(private readonly deps: AgentDeps) {
@@ -112,6 +132,7 @@ export class Agent {
   }
 
   newSession(): Session {
+    this.closeSession()
     const s: Session = { id: crypto.randomUUID(), title: 'New session', projectId: this.deps.settings().projectId, createdAt: Date.now(), messageCount: 0 }
     this.deps.store.createSession(s)
     this.sessionId = s.id
@@ -123,10 +144,27 @@ export class Agent {
 
   selectSession(id: string): ChatMessage[] {
     this.cancelTurn('session-switch')
+    if (id !== this.sessionId) this.closeSession()
     this.sessionId = id
     this.messages = this.deps.store.messages(id)
     this.tr('session.select', { messages: this.messages.length })
     return this.messages
+  }
+
+  /** p50/p95 latencies and counts over the turns of the current session. */
+  summary(): SessionSummary {
+    return summarize(this.messages.filter((m) => m.role === 'assistant' && m.metrics).map((m) => m.metrics!))
+  }
+
+  private closeSession(): void {
+    if (!this.sessionId || !this.messages.some((m) => m.role === 'assistant')) return
+    this.tr('session.summary', { ...this.summary(), selfCutSuspects: this.selfCutSuspects })
+  }
+
+  /** Called on quit: cancel what is running and write the session summary. */
+  shutdown(): void {
+    this.cancel()
+    this.closeSession()
   }
 
   private tr(ev: string, data: Record<string, unknown> = {}): void {
@@ -161,12 +199,13 @@ export class Agent {
     this.deps.emit({ type: 'partial', text })
   }
 
-  onSpeechEnd(): void {
+  onSpeechEnd(info?: SpeechEndInfo): void {
+    this.lastSpeechEnd = info ? { ...info, at: Date.now() } : { reason: 'done', silenceMs: 0, turnP: null, at: Date.now() }
     this.sm.speechEnd()
     this.deps.emit({ type: 'partial', text: '' })
   }
 
-  onFinal(text: string, asrMs: number, meta: { afterCut?: boolean; durationMs?: number } = {}): void {
+  onFinal(text: string, asrMs: number, meta: { afterCut?: boolean; durationMs?: number; queuedMs?: number } = {}): void {
     const clean = text.trim()
     this.deps.emit({ type: 'partial', text: '' })
     const tooShort = clean.length < this.deps.settings().brain.minUtteranceChars || /^[\s.,!?]*$/.test(clean)
@@ -185,7 +224,7 @@ export class Agent {
       if (this.sm.state === 'thinking') this.sm.done()
       return
     }
-    void this.handleInput(clean, 'voice', asrMs)
+    void this.handleInput(clean, 'voice', { asrMs, queuedMs: meta.queuedMs })
   }
 
   onBargeIn(stage: 'duck' | 'cut' | 'release'): void {
@@ -205,20 +244,36 @@ export class Agent {
     if (t.startedSeqs.size === 0) {
       this.sm.firstAudio()
       const m = t.assistant?.metrics ?? {}
-      const started = t.assistant?.createdAt ?? Date.now()
-      m.ttfaMs = Date.now() - started
-      this.tr('turn.first_audio', { seq, ttfaMs: m.ttfaMs })
+      const now = Date.now()
+      m.ttfaMs = now - (t.assistant?.createdAt ?? now)
+      if (t.speechEndAt !== undefined) m.speechEndToAudioMs = now - t.speechEndAt
+      if (t.speaker.firstSynthMs !== undefined) m.ttsFirstMs = t.speaker.firstSynthMs
+      if (t.speaker.firstByteMs !== undefined) m.ttsFirstByteMs = t.speaker.firstByteMs
+      this.tr('turn.first_audio', { seq, ttfaMs: m.ttfaMs, speechEndToAudioMs: m.speechEndToAudioMs, ttsFirstMs: m.ttsFirstMs, ttsFirstByteMs: m.ttsFirstByteMs })
       if (t.assistant) {
         t.assistant.metrics = m
         this.upsert(t.assistant)
+        this.deps.emit({ type: 'metrics', turnId, metrics: m })
       }
     }
     t.startedSeqs.add(seq)
-    this.tr('playback.started', { seq })
+    this.tr('playback.started', { seq, kind: t.chunks.get(seq)?.kind })
   }
 
   onPlaybackFinished(turnId?: string, seq?: number): void {
-    if (turnId && this.turn?.id === turnId) this.tr('playback.finished', { seq })
+    if (!turnId || seq === undefined) return
+    const t = this.turn?.id === turnId ? this.turn : this.cancelled?.turn.id === turnId ? this.cancelled.turn : null
+    if (!t) return
+    t.finishedSeqs.add(seq)
+    if (t === this.turn) this.tr('playback.finished', { seq })
+  }
+
+  /** The renderer's report of where a cancelled turn's audio actually stopped. */
+  onPlaybackCancelled(turnId: string, seq: number, offsetS: number, durationS: number): void {
+    const c = this.cancelled
+    if (!c || c.turn.id !== turnId) return
+    this.applySpokenSplit(c.turn, c.assistant, { seq, offsetS, durationS })
+    this.tr('turn.spoken_split', { seq, offsetS: Math.round(offsetS * 100) / 100, durationS: Math.round(durationS * 100) / 100, spokenChars: c.assistant.spokenText?.length ?? 0, unspokenChars: c.assistant.unspokenText?.length ?? 0 })
   }
 
   onPlaybackDrained(turnId: string): void {
@@ -240,7 +295,7 @@ export class Agent {
     await this.handleInput(text.trim(), 'text')
   }
 
-  private async handleInput(text: string, via: 'voice' | 'text', asrMs?: number): Promise<void> {
+  private async handleInput(text: string, via: 'voice' | 'text', voiceMeta: { asrMs?: number; queuedMs?: number } = {}): Promise<void> {
     if (!text) return
     if (this.turn) this.cancelTurn('new-input')
     this.stopReading()
@@ -266,15 +321,31 @@ export class Agent {
         degradeAfter: settings.speech.ttsDegradeAfter,
         emit: (chunk) => {
           if (this.turn?.id !== turnId) return
-          this.turn.chunkText.set(chunk.seq, chunk.text)
+          this.turn.chunks.set(chunk.seq, { seq: chunk.seq, text: chunk.text, kind: chunk.kind })
           this.deps.emitAudio(chunk)
         },
         onDegraded: () => this.toast('warn', 'Edge TTS is failing; using the system voice for now.'),
-        log: this.deps.log
+        log: this.deps.log,
+        trace: (ev, data) => this.tr(ev, data)
       },
       controller.signal
     )
-    const turn: ActiveTurn = { id: turnId, controller, assistant: null, chunkText: new Map(), startedSeqs: new Set(), speaker, llmDone: false, drained: false, startedAt: Date.now() }
+    const speechEnd = via === 'voice' ? this.lastSpeechEnd : null
+    this.lastSpeechEnd = null
+    const turn: ActiveTurn = {
+      id: turnId,
+      controller,
+      assistant: null,
+      chunks: new Map(),
+      startedSeqs: new Set(),
+      finishedSeqs: new Set(),
+      speaker,
+      llmDone: false,
+      drained: false,
+      startedAt: Date.now(),
+      speechEndAt: speechEnd?.at,
+      ttsDroppedBefore: edgeTtsStats.droppedFrames
+    }
     this.turn = turn
     this.sm.think()
     this.deps.ears.agentThinking(true)
@@ -284,14 +355,15 @@ export class Agent {
     const model = findModel(settings.modelId) ?? findModel('anthropic:claude-haiku-4-5')!
     const fallback = findModel(settings.fallbackModelId) ?? null
     const tools = this.tools(settings)
-    const memoryBlock = this.memoryBlock(text, settings)
+    const memory = this.memoryBlock(text, settings)
     const system = composeSystemPrompt(style, {
       agentName: settings.agentName,
       userName: settings.userName,
+      aboutUser: settings.aboutUser,
       ...timeContext(),
       location: await this.location.resolve(settings.location),
       projectName: this.projectName(settings),
-      memoryBlock,
+      memoryBlock: memory.block,
       skillsBlock: skillsBlock(this.deps.skills()),
       toolNames: Object.keys(tools),
       fillerEnabled: settings.behaviour.fillerBeforeTools
@@ -299,17 +371,33 @@ export class Agent {
     this.tr('turn.start', {
       via,
       text,
-      asrMs,
+      asrMs: voiceMeta.asrMs,
+      queuedMs: voiceMeta.queuedMs,
+      endReason: speechEnd?.reason,
+      silenceMs: speechEnd?.silenceMs,
+      turnP: speechEnd?.turnP,
       model: model.id,
       fallback: fallback?.id ?? null,
       style: style.id,
       mode: settings.mode,
       speak: speakThisTurn,
       tools: Object.keys(tools).length,
-      memoryHints: memoryBlock ? memoryBlock.split('\n').length : 0,
+      memoryHints: memory.profile + memory.relevant + memory.history,
+      memoryProfile: memory.profile,
+      memoryRelevant: memory.relevant,
+      memoryHistory: memory.history,
       systemChars: system.length
     })
 
+    const metrics: TurnMetrics = {}
+    if (voiceMeta.asrMs !== undefined) metrics.asrMs = voiceMeta.asrMs
+    if (voiceMeta.queuedMs !== undefined) metrics.queuedMs = voiceMeta.queuedMs
+    if (speechEnd) {
+      metrics.endReason = speechEnd.reason
+      metrics.silenceMs = speechEnd.silenceMs
+      metrics.turnP = speechEnd.turnP
+      if (speechEnd.speechMs !== undefined) metrics.speechMs = speechEnd.speechMs
+    }
     const assistant: ChatMessage = {
       id: crypto.randomUUID(),
       turnId,
@@ -317,7 +405,7 @@ export class Agent {
       role: 'assistant',
       text: '',
       streaming: true,
-      metrics: asrMs !== undefined ? { asrMs } : {},
+      metrics,
       createdAt: Date.now()
     }
     turn.assistant = assistant
@@ -329,13 +417,14 @@ export class Agent {
       model,
       fallback,
       system,
-      messages: this.modelMessages(turnId, text),
+      messages: buildModelMessages(this.messages, turnId, text, { maxMessages: settings.brain.historyMessages, toolResultKeepChars: settings.brain.toolResultKeepChars }),
       tools,
       maxSteps: settings.mode === 'ask' ? settings.brain.maxStepsAsk : settings.brain.maxStepsAgent,
       format: style.format,
       speaker,
       speech: settings.speech,
-      fillerEnabled: settings.behaviour.fillerBeforeTools && (via === 'voice' || settings.behaviour.speakTypedReplies),
+      brain: settings.brain,
+      fillerEnabled: settings.behaviour.fillerBeforeTools && speakThisTurn,
       firstTokenTimeoutMs: settings.brain.firstTokenTimeoutMs,
       stallTimeoutMs: settings.brain.stallTimeoutMs,
       toolStallTimeoutMs: settings.brain.toolStallTimeoutMs,
@@ -357,6 +446,7 @@ export class Agent {
             kind: toolKind(name),
             server: mcpServerOf(name),
             summary: describeInput(name, input),
+            input,
             status: 'running',
             startedAt: Date.now()
           },
@@ -375,6 +465,7 @@ export class Agent {
             const described = describeOutput(name, output)
             m.tool.detail = described.detail
             m.tool.sources = described.sources
+            m.tool.resultText = compactToolResult(output, settings.brain.toolResultKeepChars)
           } else m.tool.detail = error
           this.tr('turn.tool_end', { id, name, ok, ms: m.tool.endedAt - m.tool.startedAt, detail: m.tool.detail })
           this.upsert(m)
@@ -430,12 +521,20 @@ export class Agent {
 
   private finishTurn(t: ActiveTurn): void {
     if (this.turn !== t) return
+    const a = t.assistant
+    if (a) {
+      a.metrics = { ...a.metrics, totalMs: Date.now() - t.startedAt, fillers: t.speaker.fillers, interrupted: false }
+      this.upsert(a)
+      this.deps.emit({ type: 'metrics', turnId: t.id, metrics: a.metrics })
+    }
     this.tr('turn.end', {
       interrupted: false,
       totalMs: Date.now() - t.startedAt,
-      chars: t.assistant?.text.length ?? 0,
+      chars: a?.text.length ?? 0,
       chunks: t.startedSeqs.size,
-      metrics: t.assistant?.metrics ?? {}
+      fillers: t.speaker.fillers,
+      ttsDroppedFrames: edgeTtsStats.droppedFrames - t.ttsDroppedBefore,
+      metrics: a?.metrics ?? {}
     })
     this.turn = null
     this.deps.ears.agentSpeaking(false)
@@ -445,11 +544,19 @@ export class Agent {
     this.deps.emit({ type: 'context', snapshot: this.snapshot() })
   }
 
+  private applySpokenSplit(t: ActiveTurn, a: ChatMessage, cut: CutPoint | null): void {
+    const split = splitSpoken(a.text, [...t.chunks.values()], t.finishedSeqs, t.startedSeqs, cut)
+    a.spokenText = split.spoken
+    a.unspokenText = split.unspoken
+    a.metrics = { ...a.metrics, spokenChars: split.spoken.length, unspokenChars: split.unspoken.length }
+    this.upsert(a)
+    this.deps.emit({ type: 'metrics', turnId: t.id, metrics: a.metrics })
+  }
+
   cancelTurn(reason: string, keepInterrupted = false): void {
     const t = this.turn
     if (!t) return
     this.deps.log(`cancel turn ${t.id}: ${reason}`)
-    this.tr('turn.cancel', { reason, totalMs: Date.now() - t.startedAt, chars: t.assistant?.text.length ?? 0, chunksStarted: t.startedSeqs.size, llmDone: t.llmDone })
     this.turn = null
     t.controller.abort()
     this.deps.cancelAudio(t.id)
@@ -457,15 +564,20 @@ export class Agent {
     this.deps.emit({ type: 'duck', gain: 1 })
     this.deps.ears.agentSpeaking(false)
     this.deps.ears.agentThinking(false)
-    if (t.assistant) {
-      const a = t.assistant
+    const a = t.assistant
+    if (a) {
       a.streaming = false
       if (a.text) {
         a.interrupted = true
-        a.spokenText = [...t.startedSeqs].sort((x, y) => x - y).map((s) => t.chunkText.get(s) ?? '').filter(Boolean).join(' ')
-        if (reason === 'barge-in') this.lastSpokenText = a.spokenText
+        a.metrics = { ...a.metrics, interrupted: true, totalMs: Date.now() - t.startedAt, fillers: t.speaker.fillers }
+        // provisional split now; refined when the renderer reports where the cut landed
+        this.applySpokenSplit(t, a, null)
+        this.cancelled = { turn: t, assistant: a }
+        if (reason === 'barge-in') this.lastSpokenText = a.spokenText ?? ''
+      } else {
+        this.messages = this.messages.filter((m) => m.id !== a.id)
+        this.cancelled = null
       }
-      if (!a.text) this.messages = this.messages.filter((m) => m.id !== a.id)
       this.upsert(a)
     }
     for (const m of this.messages) {
@@ -475,6 +587,20 @@ export class Agent {
         this.upsert(m)
       }
     }
+    this.deps.trace({
+      ev: 'turn.cancel',
+      sid: this.sessionId,
+      turn: t.id,
+      reason,
+      totalMs: Date.now() - t.startedAt,
+      chars: a?.text.length ?? 0,
+      chunksStarted: t.startedSeqs.size,
+      chunksFinished: t.finishedSeqs.size,
+      spokenText: a?.spokenText,
+      unspokenText: a?.unspokenText,
+      llmDone: t.llmDone,
+      metrics: a?.metrics ?? {}
+    })
     if (!keepInterrupted) this.sm.done()
   }
 
@@ -588,18 +714,31 @@ export class Agent {
     return this.deps.store.projects().find((p) => p.id === s.projectId)?.name ?? 'none'
   }
 
-  private memoryBlock(userText: string, s: Settings): string {
+  /** Profile entries, BM25-relevant entries and matching lines from past sessions, as prompt lines. */
+  private memoryBlock(userText: string, s: Settings): { block: string; profile: number; relevant: number; history: number } {
     const scopes = this.scopeIds(s)
+    const max = s.memory.hintMaxChars
     const profile = this.deps.store.profile(scopes, s.memory.profileLimit)
     const relevant = this.deps.store.relevant(userText, scopes, s.memory.relevantLimit, s.memory.relevantMinScore)
     const seen = new Set<number>()
     const lines: string[] = []
-    for (const e of [...profile, ...relevant]) {
+    let relevantCount = 0
+    for (const e of profile) {
+      seen.add(e.id)
+      lines.push(`- ${e.key}: ${clip(e.value, max)}${e.scopeId !== GLOBAL_SCOPE ? ' (project)' : ''}`)
+    }
+    for (const e of relevant) {
       if (seen.has(e.id)) continue
       seen.add(e.id)
-      lines.push(`- ${e.key}: ${e.value}${e.scopeId !== GLOBAL_SCOPE ? ` (project)` : ''}`)
+      relevantCount++
+      lines.push(`- ${e.key}: ${clip(e.value, max)} (${e.kind}, ${relativeTime(e.updatedAt)}${e.scopeId !== GLOBAL_SCOPE ? ', project' : ''})`)
     }
-    return lines.join('\n')
+    const history = this.deps.store.searchHistory(userText, this.sessionId, s.memory.historyHits, s.memory.relevantMinScore)
+    for (const h of history) {
+      const who = h.role === 'user' ? s.userName : 'you'
+      lines.push(`- ${relativeTime(h.createdAt)}, in "${clip(h.sessionTitle, 40)}", ${who} said: "${clip(h.text, max)}"`)
+    }
+    return { block: lines.join('\n'), profile: profile.length, relevant: relevantCount, history: history.length }
   }
 
   private tools(s: Settings): ToolSet {
@@ -621,20 +760,6 @@ export class Agent {
     if (this.deps.search.configured()) Object.assign(tools, searchTools(this.deps.search))
     if (this.deps.mcp.enabled()) Object.assign(tools, mcpTools(this.deps.mcp))
     return tools
-  }
-
-  private modelMessages(currentTurnId: string, userText: string): ModelMessage[] {
-    const history = this.messages.filter((m) => m.role !== 'tool' && m.turnId !== currentTurnId).slice(-this.deps.settings().brain.historyMessages)
-    const out: ModelMessage[] = []
-    for (const m of history) {
-      if (m.role === 'user') out.push({ role: 'user', content: m.text })
-      else if (m.text) {
-        const content = m.interrupted ? `${m.spokenText || m.text}\n[the user interrupted here; the rest was never said]` : m.text
-        out.push({ role: 'assistant', content })
-      }
-    }
-    out.push({ role: 'user', content: userText })
-    return out
   }
 
   private upsert(m: ChatMessage): void {

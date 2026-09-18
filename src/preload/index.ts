@@ -33,6 +33,7 @@ const api: VoiceAgentApi = {
   playback: {
     started: (turnId, seq) => ipcRenderer.send(IPC.playbackStarted, turnId, seq),
     finished: (turnId, seq) => ipcRenderer.send(IPC.playbackFinished, turnId, seq),
+    cancelled: (turnId, seq, offsetS, durationS) => ipcRenderer.send(IPC.playbackCancelled, turnId, seq, offsetS, durationS),
     drained: (turnId) => ipcRenderer.send(IPC.playbackDrained, turnId)
   },
   styles: {

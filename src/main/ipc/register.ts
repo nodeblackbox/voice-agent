@@ -80,6 +80,7 @@ export function registerIpc(d: IpcDeps): void {
 
   ipcMain.on(IPC.playbackStarted, (_e, turnId: string, seq: number) => d.agent.onPlaybackStarted(turnId, seq))
   ipcMain.on(IPC.playbackFinished, (_e, turnId: string, seq: number) => d.agent.onPlaybackFinished(turnId, seq))
+  ipcMain.on(IPC.playbackCancelled, (_e, turnId: string, seq: number, offsetS: number, durationS: number) => d.agent.onPlaybackCancelled(turnId, seq, offsetS, durationS))
   ipcMain.on(IPC.playbackDrained, (_e, turnId: string) => d.agent.onPlaybackDrained(turnId))
 
   const allStyles = (): PromptStyle[] => [...BUILTIN_STYLES, ...d.settings.styles()]

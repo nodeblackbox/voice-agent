@@ -2,34 +2,34 @@ import type { Readable } from 'node:stream'
 import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts'
 import { DEFAULT_TUNING } from '@shared/tuning'
 
-// Monkey-patch MsEdgeTTS to fix race condition where audio data arrives before stream is initialized
-const originalPushAudioData = (MsEdgeTTS.prototype as any)._pushAudioData
-if (originalPushAudioData) {
-  (MsEdgeTTS.prototype as any)._pushAudioData = function (data: any, requestId: string) {
-    // Check if stream exists before trying to push data
-    if (this._streams && this._streams[requestId] && this._streams[requestId].audio) {
-      originalPushAudioData.call(this, data, requestId)
-    }
-    // Silently ignore if stream doesn't exist (race condition or already cleaned up)
+/** Frames msedge-tts delivered for a request whose stream was already destroyed (abort/timeout) or not yet registered. */
+export const edgeTtsStats = { droppedFrames: 0 }
+
+type StreamOwner = { _streams?: Record<string, Record<string, unknown> | undefined> }
+type Push = (this: StreamOwner, data: unknown, requestId: string) => void
+
+// msedge-tts shares one socket per client; with pooled workers a frame can arrive for a request
+// whose stream we destroyed on abort/timeout, and the library then throws inside its socket
+// handler and takes the process down. Guard the push and count what was dropped instead.
+export function guardStreamPush(original: Push, field: 'audio' | 'metadata'): Push {
+  return function (this: StreamOwner, data: unknown, requestId: string): void {
+    const stream = this._streams?.[requestId]
+    if (stream && stream[field]) original.call(this, data, requestId)
+    else edgeTtsStats.droppedFrames++
   }
 }
 
-const originalPushMetadata = (MsEdgeTTS.prototype as any)._pushMetadata
-if (originalPushMetadata) {
-  (MsEdgeTTS.prototype as any)._pushMetadata = function (data: any, requestId: string) {
-    // Check if stream exists before trying to push metadata
-    if (this._streams && this._streams[requestId] && this._streams[requestId].metadata) {
-      originalPushMetadata.call(this, data, requestId)
-    }
-    // Silently ignore if stream doesn't exist (race condition or already cleaned up)
-  }
-}
+const proto = MsEdgeTTS.prototype as unknown as Record<string, Push | undefined>
+if (proto._pushAudioData) proto._pushAudioData = guardStreamPush(proto._pushAudioData, 'audio')
+if (proto._pushMetadata) proto._pushMetadata = guardStreamPush(proto._pushMetadata, 'metadata')
 
 export interface TtsRequest {
   text: string
   voice: string
   rate: number
   pitch: number
+  /** Called once with request -> first audio byte latency, when the engine can measure it. */
+  onFirstByte?: (ms: number) => void
 }
 
 // Returns MP3 bytes, or null when the renderer should speak the text itself (system voice).
@@ -113,6 +113,7 @@ export class EdgeTtsEngine implements TtsEngine {
     let healthy = true
     try {
       await w.ensure(req.voice)
+      const t0 = performance.now()
       return await new Promise<Buffer>((resolve, reject) => {
         let settled = false
         const chunks: Buffer[] = []
@@ -151,7 +152,10 @@ export class EdgeTtsEngine implements TtsEngine {
         const onAbort = (): void => finish(abortError())
         const timer = setTimeout(() => finish(new Error('Edge TTS timed out')), this.timeout)
         signal.addEventListener('abort', onAbort, { once: true })
-        audioStream.on('data', (d: Buffer) => chunks.push(d))
+        audioStream.on('data', (d: Buffer) => {
+          if (!chunks.length) req.onFirstByte?.(performance.now() - t0)
+          chunks.push(d)
+        })
         audioStream.on('error', (e: Error) => finish(e))
         audioStream.on('end', () => finish(null))
         audioStream.on('close', () => finish(null))

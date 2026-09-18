@@ -87,9 +87,13 @@ function AssistantBubble({
             <Square size={9} /> interrupted
           </span>
         )}
-        {m.metrics?.ttfaMs !== undefined && (
-          <span className="text-xs ml-1" style={{ color: T.text3, fontFamily: T.mono }} title="time to first audio">
-            {Math.round(m.metrics.ttfaMs)}ms
+        {(m.metrics?.speechEndToAudioMs ?? m.metrics?.ttfaMs) !== undefined && (
+          <span
+            className="text-xs ml-1"
+            style={{ color: T.text3, fontFamily: T.mono }}
+            title={m.metrics?.speechEndToAudioMs !== undefined ? 'end of your speech to first audio' : 'time to first audio'}
+          >
+            {Math.round((m.metrics?.speechEndToAudioMs ?? m.metrics?.ttfaMs)!)}ms
           </span>
         )}
         {m.metrics?.inputTokens !== undefined && m.metrics?.outputTokens !== undefined && (

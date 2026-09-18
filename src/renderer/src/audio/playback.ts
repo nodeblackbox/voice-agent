@@ -3,10 +3,17 @@ import { DEFAULT_TUNING } from '@shared/tuning'
 import { ChunkQueue, isTerminalMarker, type QueuedChunk } from './chunk-queue'
 import { rlog } from '../lib/rlog'
 
+interface LiveSource {
+  seq: number
+  startAt: number
+  duration: number
+}
+
 interface TurnQueue {
   queue: ChunkQueue<AudioBuffer>
   nextTime: number
   sources: Set<AudioBufferSourceNode>
+  live: Map<AudioBufferSourceNode, LiveSource>
   pumping: boolean
 }
 
@@ -48,7 +55,7 @@ function applyGain(): void {
 function getTurn(turnId: string): TurnQueue {
   let t = turns.get(turnId)
   if (!t) {
-    t = { queue: new ChunkQueue<AudioBuffer>(), nextTime: 0, sources: new Set(), pumping: false }
+    t = { queue: new ChunkQueue<AudioBuffer>(), nextTime: 0, sources: new Set(), live: new Map(), pumping: false }
     turns.set(turnId, t)
   }
   return t
@@ -94,8 +101,10 @@ async function pump(turnId: string, t: TurnQueue): Promise<void> {
         src.buffer = item.buffer
         src.connect(master ?? c.destination)
         t.sources.add(src)
+        t.live.set(src, { seq: item.seq, startAt: start, duration: item.buffer.duration })
         src.onended = () => {
           t.sources.delete(src)
+          t.live.delete(src)
           markFinished(turnId, t, item.seq)
         }
         src.start(start)
@@ -146,6 +155,12 @@ function cancel(turnId: string | null): void {
     const t = turns.get(id)
     if (!t) continue
     t.queue.cancel()
+    // tell main how far into the current sentence the cut landed, so "what was heard" is exact
+    const now = ctx?.currentTime ?? 0
+    for (const [, l] of t.live) {
+      if (now >= l.startAt && now < l.startAt + l.duration) window.api.playback.cancelled(id, l.seq, now - l.startAt, l.duration)
+    }
+    t.live.clear()
     for (const s of t.sources) {
       try {
         s.stop()

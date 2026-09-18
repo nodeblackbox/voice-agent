@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { LocationProvider, timeContext } from './index'
+import { LocationProvider, relativeTime, timeContext } from './index'
 
 describe('timeContext', () => {
   it('returns a human date with the resolved timezone', () => {
@@ -8,6 +8,21 @@ describe('timeContext', () => {
     expect(t.now).toMatch(/\d{4}/)
     expect(t.now).toMatch(/\d{2}:\d{2}/)
     expect(t.now).toMatch(/^(Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day/)
+  })
+})
+
+describe('relativeTime', () => {
+  it('renders relative times coarsely', () => {
+    const now = 1_000_000_000_000
+    const m = 60_000
+    expect(relativeTime(now - 10_000, now)).toBe('just now')
+    expect(relativeTime(now - 5 * m, now)).toBe('5 min ago')
+    expect(relativeTime(now - 3 * 60 * m, now)).toBe('3 h ago')
+    expect(relativeTime(now - 24 * 60 * m, now)).toBe('yesterday')
+    expect(relativeTime(now - 4 * 24 * 60 * m, now)).toBe('4 days ago')
+    expect(relativeTime(now - 21 * 24 * 60 * m, now)).toBe('3 weeks ago')
+    expect(relativeTime(now - 90 * 24 * 60 * m, now)).toBe('3 months ago')
+    expect(relativeTime(now - 800 * 24 * 60 * m, now)).toBe('2 years ago')
   })
 })
 

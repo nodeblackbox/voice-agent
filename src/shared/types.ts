@@ -15,6 +15,8 @@ export interface ModelInfo {
   label: string
   note?: string
   fast?: boolean
+  /** Reasoning model: the reasoning-effort tuning applies. */
+  reasoning?: boolean
 }
 
 export type Mode = 'ask' | 'agent'
@@ -71,18 +73,57 @@ export interface ToolActivity {
   detail?: string
   sources?: ToolSource[]
   server?: string
+  /** The call's arguments, kept so the call can be replayed into the model's history. */
+  input?: unknown
+  /** Compacted result text kept in history for later turns (see brain.toolResultKeepChars). */
+  resultText?: string
 }
 
 export interface TurnMetrics {
+  /** Final ASR decode time reported by the ears. */
   asrMs?: number
+  /** Time the utterance waited for the decoder. */
+  queuedMs?: number
+  /** Turn start (final transcript received) -> first token. */
   ttftMs?: number
+  /** Turn start -> first complete sentence handed to TTS. */
   ttfsMs?: number
+  /** Synthesis time of the first sentence (request -> full audio). */
+  ttsFirstMs?: number
+  /** Edge TTS request -> first audio byte for the first sentence. */
+  ttsFirstByteMs?: number
+  /** Turn start -> first audio playing. */
   ttfaMs?: number
+  /** End of the user's speech -> first audio playing: the number humans feel. Voice turns only. */
+  speechEndToAudioMs?: number
   totalMs?: number
   model?: string
   inputTokens?: number
   outputTokens?: number
   steps?: number
+  /** Why the ears closed the turn, and the Smart Turn score that did it. */
+  endReason?: 'done' | 'timeout'
+  silenceMs?: number
+  speechMs?: number
+  turnP?: number | null
+  interrupted?: boolean
+  spokenChars?: number
+  unspokenChars?: number
+  fillers?: number
+  stallReason?: string
+  fallbackUsed?: boolean
+  hitStepLimit?: boolean
+}
+
+export interface SessionSummary {
+  turns: number
+  voiceTurns: number
+  interrupted: number
+  fallbacks: number
+  stalls: number
+  stepLimits: number
+  fillers: number
+  latency: Partial<Record<'asrMs' | 'ttftMs' | 'ttfsMs' | 'ttsFirstMs' | 'ttfaMs' | 'speechEndToAudioMs' | 'totalMs', { p50: number; p95: number; n: number }>>
 }
 
 export interface Skill {
@@ -114,7 +155,10 @@ export interface ChatMessage {
   via?: 'voice' | 'text'
   streaming?: boolean
   interrupted?: boolean
+  /** What the user actually heard before an interruption. */
   spokenText?: string
+  /** What was generated but never played. */
+  unspokenText?: string
   tool?: ToolActivity
   metrics?: TurnMetrics
   createdAt: number
@@ -213,6 +257,8 @@ export interface Settings {
   projectId: string
   agentName: string
   userName: string
+  /** One line about the user for the prompt ("technical, prefers direct answers"). */
+  aboutUser: string
   voice: VoiceSettings
   audio: AudioDeviceSettings
   endpoint: EndpointSettings
@@ -309,4 +355,6 @@ export interface AudioChunk {
   text: string
   mp3: ArrayBuffer
   last: boolean
+  /** Fillers are spoken but never count as part of the reply the user heard. */
+  kind: 'speech' | 'filler'
 }

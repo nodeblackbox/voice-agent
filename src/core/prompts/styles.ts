@@ -8,7 +8,7 @@ export const BUILTIN_STYLES: PromptStyle[] = [
     kind: 'built-in',
     length: 'short',
     format: 'plain',
-    body: `Answer in one or two short spoken sentences. Lead with the answer. Add detail only when asked, or when it changes what {user_name} should do next. Never pad, never recap the question.`
+    body: `Keep the whole reply to one or two short spoken sentences. Add detail only when asked, or when it changes what {user_name} should do next. Never pad, never recap the question.`
   },
   {
     id: 'balanced',

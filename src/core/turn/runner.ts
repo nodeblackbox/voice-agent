@@ -1,11 +1,10 @@
 import { stepCountIs, streamText, type LanguageModel, type ModelMessage, type ToolSet } from 'ai'
-import type { ModelInfo, SpeechSettings, TurnMetrics } from '@shared/types'
+import type { BrainSettings, ModelInfo, SpeechSettings, StyleFormat, TurnMetrics } from '@shared/types'
 import { MissingKeyError, type ModelFactory } from '../providers/factory'
 import { SentenceChunker } from '../speech/chunker'
 import { SpeakableFilter } from '../prompts/speakable'
 import type { Speaker } from '../speech/speaker'
-import { fillerFor } from '../speech/fillers'
-import type { StyleFormat } from '@shared/types'
+import { STEP_LIMIT_PHRASE, continuationFiller, fillerFor } from '../speech/fillers'
 
 export interface RunnerDeps {
   factory: ModelFactory
@@ -18,6 +17,7 @@ export interface RunnerDeps {
   format: StyleFormat
   speaker: Speaker
   speech: SpeechSettings
+  brain: BrainSettings
   fillerEnabled: boolean
   firstTokenTimeoutMs: number
   stallTimeoutMs: number
@@ -37,6 +37,7 @@ export interface RunnerResult {
   aborted: boolean
   error?: string
   modelUsed: string
+  hitStepLimit?: boolean
 }
 
 type Attempt = { model: ModelInfo; reason: string }
@@ -55,10 +56,23 @@ const describe = (e: unknown): string => {
   return s ? `${s}: ${msg}` : msg
 }
 
+const sleep = (ms: number, signal: AbortSignal): Promise<void> =>
+  new Promise((resolve) => {
+    if (signal.aborted) return resolve()
+    const t = setTimeout(done, ms)
+    function done(): void {
+      clearTimeout(t)
+      signal.removeEventListener('abort', done)
+      resolve()
+    }
+    signal.addEventListener('abort', done, { once: true })
+  })
+
 export class TurnRunner {
   private text = ''
   private startedAt = performance.now()
   private metrics: TurnMetrics = {}
+  private lastFillerAt = Number.NEGATIVE_INFINITY
 
   constructor(private readonly deps: RunnerDeps) {}
 
@@ -71,6 +85,8 @@ export class TurnRunner {
 
     let lastError: unknown
     for (const attempt of attempts) {
+      if (signal.aborted) return { text: this.text, aborted: true, modelUsed: attempt.model.id }
+      if (attempt.reason === 'retry' && this.deps.brain.retryBackoffMs > 0) await sleep(this.deps.brain.retryBackoffMs, signal)
       if (signal.aborted) return { text: this.text, aborted: true, modelUsed: attempt.model.id }
       if (attempt.reason === 'fallback') this.deps.onNotice(`${this.deps.model.label} isn't responding, trying ${attempt.model.label}.`)
       if (attempt.reason !== 'primary') this.deps.trace?.('turn.attempt', { reason: attempt.reason, model: attempt.model.id })
@@ -93,6 +109,12 @@ export class TurnRunner {
     return { text: this.text, aborted: false, error: describe(lastError), modelUsed: this.deps.model.id }
   }
 
+  private providerOptions(info: ModelInfo): Record<string, Record<string, string>> | undefined {
+    const effort = this.deps.brain.groqReasoningEffort
+    if (info.provider === 'groq' && info.reasoning && effort !== 'default') return { groq: { reasoningEffort: effort } }
+    return undefined
+  }
+
   private async attempt(info: ModelInfo, outer: AbortSignal): Promise<RunnerResult> {
     const { model, key } = this.deps.factory.create(info)
     const inner = new AbortController()
@@ -111,13 +133,37 @@ export class TurnRunner {
       timer = null
     }
 
+    // "Still looking." after a tool has been quiet for fillerAfterMs, once per tool call
+    let continuation: NodeJS.Timeout | null = null
+    const cancelContinuation = (): void => {
+      if (continuation) clearTimeout(continuation)
+      continuation = null
+    }
+    const scheduleContinuation = (toolName: string, delayMs: number): void => {
+      cancelContinuation()
+      continuation = setTimeout(() => {
+        continuation = null
+        if (signal.aborted || toolsInFlight === 0 || !this.deps.fillerEnabled) return
+        const busy = this.deps.speaker.busyForMs()
+        if (busy > 0) {
+          scheduleContinuation(toolName, Math.max(200, busy))
+          return
+        }
+        const text = continuationFiller()
+        this.deps.trace?.('turn.filler', { kind: 'continuation', tool: toolName, text })
+        this.deps.speaker.say(text, 'filler')
+        this.lastFillerAt = performance.now()
+      }, delayMs)
+    }
+
     const chunker = new SentenceChunker(this.deps.speech.maxChars, this.deps.speech.firstMinWords)
     const filter = new SpeakableFilter(this.deps.format)
     let firstToken = false
     let firstSentence = false
     let toolsInFlight = 0
-    let fillerSaid = false
+    let lastFinish: string | undefined
     const textBefore = this.text
+    const fallbackUsed = info.id !== this.deps.model.id
 
     try {
       arm(this.deps.firstTokenTimeoutMs, 'no response from the model')
@@ -128,7 +174,10 @@ export class TurnRunner {
         tools: this.deps.tools,
         stopWhen: stepCountIs(this.deps.maxSteps),
         abortSignal: signal,
-        maxRetries: 0
+        maxRetries: 0,
+        temperature: this.deps.brain.temperature,
+        maxOutputTokens: this.deps.brain.maxTokens,
+        providerOptions: this.providerOptions(info)
       })
 
       for await (const part of result.fullStream) {
@@ -155,12 +204,17 @@ export class TurnRunner {
           case 'tool-call': {
             toolsInFlight++
             this.deps.onToolStart(part.toolCallId, part.toolName, part.input)
-            if (this.deps.fillerEnabled && !fillerSaid) {
-              fillerSaid = true
+            if (this.deps.fillerEnabled) {
+              const now = performance.now()
+              // flush whatever the model said before the call so the lead-in follows it immediately
               for (const s of chunker.flush()) this.deps.speaker.say(s)
-              const filler = fillerFor(part.toolName)
-              this.deps.trace?.('turn.filler', { kind: 'lead-in', tool: part.toolName, text: filler })
-              this.deps.speaker.say(filler)
+              if (now - this.lastFillerAt >= this.deps.speech.fillerMinGapMs) {
+                const filler = fillerFor(part.toolName)
+                this.deps.trace?.('turn.filler', { kind: 'lead-in', tool: part.toolName, text: filler })
+                this.deps.speaker.say(filler, 'filler')
+                this.lastFillerAt = now
+              }
+              scheduleContinuation(part.toolName, this.deps.speech.fillerAfterMs)
             }
             this.deps.onCue(true)
             arm(this.deps.toolStallTimeoutMs, `the ${part.toolName} tool took too long`)
@@ -169,19 +223,26 @@ export class TurnRunner {
           case 'tool-result': {
             toolsInFlight = Math.max(0, toolsInFlight - 1)
             this.deps.onToolEnd(part.toolCallId, part.toolName, true, part.output)
-            if (toolsInFlight === 0) this.deps.onCue(false)
+            if (toolsInFlight === 0) {
+              this.deps.onCue(false)
+              cancelContinuation()
+            }
             arm(this.deps.stallTimeoutMs, 'the model stopped after a tool call')
             break
           }
           case 'tool-error': {
             toolsInFlight = Math.max(0, toolsInFlight - 1)
             this.deps.onToolEnd(part.toolCallId, part.toolName, false, undefined, describe(part.error))
-            if (toolsInFlight === 0) this.deps.onCue(false)
+            if (toolsInFlight === 0) {
+              this.deps.onCue(false)
+              cancelContinuation()
+            }
             arm(this.deps.stallTimeoutMs, 'the model stopped after a tool error')
             break
           }
           case 'finish-step': {
             this.metrics.steps = (this.metrics.steps ?? 0) + 1
+            lastFinish = part.finishReason
             const u = part.usage as { inputTokens?: number | { total?: number }; outputTokens?: number | { total?: number } } | undefined
             const total = (v: number | { total?: number } | undefined): number => (typeof v === 'number' ? v : (v?.total ?? 0))
             this.metrics.inputTokens = (this.metrics.inputTokens ?? 0) + total(u?.inputTokens)
@@ -197,15 +258,29 @@ export class TurnRunner {
         }
       }
       disarm()
+      cancelContinuation()
       if (inner.signal.aborted && !outer.aborted) throw new Error(`stall: ${stallReason}`)
       for (const s of chunker.flush()) this.deps.speaker.say(s)
+      let hitStepLimit = false
+      if (lastFinish === 'tool-calls' && (this.metrics.steps ?? 0) >= this.deps.maxSteps) {
+        // the model still wanted tools when the round cap hit: say so instead of going quiet
+        hitStepLimit = true
+        const phrase = (this.text ? ' ' : '') + STEP_LIMIT_PHRASE
+        this.text += phrase
+        this.deps.onDelta(phrase)
+        this.deps.speaker.say(STEP_LIMIT_PHRASE)
+        this.deps.trace?.('turn.step_limit', { steps: this.metrics.steps, maxSteps: this.deps.maxSteps })
+      }
       if (info.provider === 'groq') this.deps.factory.groqPool.report(key, 200)
       this.metrics.totalMs = Math.round(performance.now() - this.startedAt)
       this.metrics.model = info.id
+      if (fallbackUsed) this.metrics.fallbackUsed = true
+      if (hitStepLimit) this.metrics.hitStepLimit = true
       this.deps.onMetrics(this.metrics)
-      return { text: this.text, aborted: outer.aborted, modelUsed: info.id }
+      return { text: this.text, aborted: outer.aborted, modelUsed: info.id, hitStepLimit }
     } catch (e) {
       disarm()
+      cancelContinuation()
       this.deps.onCue(false)
       if (info.provider === 'groq') {
         const s = status(e)
@@ -218,6 +293,8 @@ export class TurnRunner {
           for (const s of chunker.flush()) this.deps.speaker.say(s)
           this.deps.onNotice(`Response cut short: ${stallReason}.`)
           this.metrics.model = info.id
+          this.metrics.stallReason = stallReason
+          if (fallbackUsed) this.metrics.fallbackUsed = true
           this.deps.onMetrics(this.metrics)
           return { text: this.text, aborted: false, error: stallReason, modelUsed: info.id }
         }

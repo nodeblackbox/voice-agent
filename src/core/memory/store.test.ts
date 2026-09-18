@@ -100,6 +100,16 @@ describe('MemoryStore sessions and messages', () => {
     ])
     expect(store.searchHistory('gym closes', 's2').map((r) => r.sessionTitle)).toEqual(['One'])
     expect(store.searchHistory('gym closes', 's1')).toEqual([])
+    // a min score high enough filters weak matches out; 0 keeps them; a zero limit returns nothing
+    expect(store.searchHistory('gym closes', 's2', 8, 100)).toEqual([])
+    expect(store.searchHistory('gym closes', 's2', 0)).toEqual([])
+  })
+
+  it('relevant() honours the min score and limit', () => {
+    store.upsert({ scopeId: GLOBAL_SCOPE, kind: 'fact', key: 'Kokoro note', value: 'Kokoro needed a resident model', source: 'agent' })
+    expect(store.relevant('kokoro', [GLOBAL_SCOPE], 6, 0)).toHaveLength(1)
+    expect(store.relevant('kokoro', [GLOBAL_SCOPE], 6, 100)).toHaveLength(0)
+    expect(store.relevant('kokoro', [GLOBAL_SCOPE], 0, 0)).toHaveLength(0)
   })
 
   it('updates a message in place on conflict and deletes sessions with messages', () => {

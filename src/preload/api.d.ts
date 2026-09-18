@@ -50,6 +50,8 @@ export interface VoiceAgentApi {
   playback: {
     started(turnId: string, seq: number): void
     finished(turnId: string, seq: number): void
+    /** The chunk that was playing when the turn was cancelled, and how far into it the cut landed. */
+    cancelled(turnId: string, seq: number, offsetS: number, durationS: number): void
     drained(turnId: string): void
   }
   styles: {
