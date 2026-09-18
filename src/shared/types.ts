@@ -96,6 +96,8 @@ export interface TurnMetrics {
   ttsFirstByteMs?: number
   /** Turn start -> first audio playing. */
   ttfaMs?: number
+  /** First chunk leaving the agent -> the renderer starting it (IPC + decode + scheduling). Over ~150 ms means the UI is too busy. */
+  rendererMs?: number
   /** End of the user's speech -> first audio playing: the number humans feel. Voice turns only. */
   speechEndToAudioMs?: number
   totalMs?: number
@@ -184,7 +186,7 @@ export interface SessionSummary {
   stalls: number
   stepLimits: number
   fillers: number
-  latency: Partial<Record<'asrMs' | 'ttftMs' | 'ttfsMs' | 'ttsFirstMs' | 'ttfaMs' | 'speechEndToAudioMs' | 'totalMs', { p50: number; p95: number; n: number }>>
+  latency: Partial<Record<'asrMs' | 'ttftMs' | 'ttfsMs' | 'ttsFirstMs' | 'rendererMs' | 'ttfaMs' | 'speechEndToAudioMs' | 'totalMs', { p50: number; p95: number; n: number }>>
 }
 
 export interface Skill {
@@ -458,4 +460,6 @@ export interface AudioChunk {
   last: boolean
   /** Fillers are spoken but never count as part of the reply the user heard. */
   kind: 'speech' | 'filler'
+  /** Main-process clock when the chunk left the agent; the renderer echoes it back so the UI stage can be timed. */
+  emittedAt?: number
 }

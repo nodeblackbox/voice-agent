@@ -27,7 +27,7 @@ Every line has `t` (ISO time), `sid` (session), usually `turn`, and `ev`. Prefix
 |---|---|---|
 | `state` | agent state machine | `{from, to, event}` — every transition (`idle`, `listening`, `user_speaking`, `thinking`, `tool`, `speaking`, `interrupted`) |
 | `ear.*` | sidecar events (never `level`) | `speech_start{earT}`, `partial{text}`, `speech_end{reason, silenceMs, turnP, speechMs, checks[{silenceMs,p,heldOnFiller,lastWord,capMs}], afterCut, capMs, segments}`, `segment{text, index}` (older part of a long utterance, turn still open), `final{text, durationMs, asrMs, asrRtf, queuedMs, afterCut, segments}`, `bargein{stage: duck|cut|release, prerollMs}`, `status{stage}`, `ready{loadS}`, `stats{turns, turnChecks, turnCostP50Ms, heldOnFiller, backchannels, cuts, cutsEmptyFinal}`, `error` |
-| `turn.*` | agent core | `start{via, text, asrMs, queuedMs, endReason, silenceMs, turnP, model, style, mode, tools, memoryHints…}`, `first_token{ttftMs}`, `first_sentence{ttfsMs}`, `first_audio{ttfaMs, speechEndToAudioMs, ttsFirstMs, ttsFirstByteMs}`, `tool_start{id, name, summary}`, `tool_end{id, name, ok, ms, detail}`, `filler{kind: lead-in|continuation, text}`, `attempt{reason, model}`, `attempt_failed{error, transient}`, `stall{reason}`, `step_limit`, `notice{text}`, `self_cut_suspect{overlap}`, `dropped{reason}`, `spoken_split{seq, offsetS, durationS}`, `cancel{reason, spokenText, unspokenText, metrics}`, `drain_timeout{waitMs}` (the renderer never reported the audio finished, e.g. audio device error), `end{metrics, fillers, ttsDroppedFrames}`, `error{message}`, `mergeable{reason}` (this transcript looked unfinished; a resume inside the window merges), `continuation{gapMs}` (the user resumed: reply cancelled silently), `merged{parts, text}` (the joined transcript starts a turn), `segment{index}` |
+| `turn.*` | agent core | `start{via, text, asrMs, queuedMs, endReason, silenceMs, turnP, model, style, mode, tools, memoryHints…}`, `first_token{ttftMs}`, `first_sentence{ttfsMs}`, `first_audio{ttfaMs, speechEndToAudioMs, ttsFirstMs, ttsFirstByteMs, rendererMs}`, `tool_start{id, name, summary}`, `tool_end{id, name, ok, ms, detail}`, `filler{kind: lead-in|continuation, text}`, `attempt{reason, model}`, `attempt_failed{error, transient}`, `stall{reason}`, `step_limit`, `notice{text}`, `self_cut_suspect{overlap}`, `dropped{reason}`, `spoken_split{seq, offsetS, durationS}`, `cancel{reason, spokenText, unspokenText, metrics}`, `drain_timeout{waitMs}` (the renderer never reported the audio finished, e.g. audio device error), `end{metrics, fillers, ttsDroppedFrames}`, `error{message}`, `mergeable{reason}` (this transcript looked unfinished; a resume inside the window merges), `continuation{gapMs}` (the user resumed: reply cancelled silently), `merged{parts, text}` (the joined transcript starts a turn), `segment{index}` |
 | `tts.warm` | agent | `{turnId, ms}` — the Edge socket pre-opened at turn start (only logged when it had to reconnect or succeeded) |
 | `tts.sentence` | speaker | `{seq, kind, chars, ms, firstByteMs, attempts, outcome: ok|skip|fallback, engine}` |
 | `playback.*` | renderer via agent | `started{seq, kind}`, `finished{seq}`, `drained{chunks}` |
@@ -62,8 +62,15 @@ A healthy voice turn looks like this (relative times from Diagnostics → Last t
 ```
 
 The number that matters is `speechEndToAudioMs` on `turn.first_audio`: it is `silenceMs` (how long
-the ears waited) + `asrMs` + `ttftMs` + time to the first sentence + `ttsFirstMs`. Each of those has
-a knob in `docs/TUNING.md`.
+the ears waited) + `asrMs` + `ttftMs` + time to the first sentence + `ttsFirstMs` + `rendererMs`
+(the chunk leaving main → the renderer starting it: IPC, MP3 decode, scheduling; normally 20–60 ms).
+Each of those has a knob in `docs/TUNING.md`.
+
+**"The text is all there but the voice starts seconds later."** `rendererMs` is large (it reached
+3 s after 90 minutes of chat before the transcript was windowed and streaming updates were batched):
+the renderer main thread is too busy to run the audio callbacks. `app.log` also has
+`renderer:playback: seq 0 scheduled N ms after it arrived`. Check what else is loading the window
+(DevTools, a huge tool result, an extension) and `uiFlushMs`.
 
 ## Three complaints
 

@@ -36,6 +36,7 @@ import { TurnRunner } from './turn/runner'
 import { buildModelMessages, compactToolResult } from './turn/history'
 import { splitSpoken, type CutPoint, type SpokenChunk } from './turn/spoken'
 import { mergeTexts, parseFillerWords, unfinishedReason } from './turn/continuation'
+import { Coalescer } from './turn/coalesce'
 import { summarize } from './metrics/summary'
 import type { Trace } from './trace'
 
@@ -143,6 +144,14 @@ export class Agent {
   /** Segments of a long utterance that is still open. */
   private segmentBuffer: { userMsgId: string; texts: string[] } | null = null
   selfCutSuspects = 0
+  /** Streaming message updates are persisted and pushed to the UI at `brain.uiFlushMs`, not per token. */
+  private readonly flusher = new Coalescer<ChatMessage>(
+    (m) => {
+      this.deps.store.saveMessage(m)
+      this.deps.emit({ type: 'message', message: m })
+    },
+    () => this.deps.settings().brain.uiFlushMs
+  )
 
   constructor(private readonly deps: AgentDeps) {
     this.sm = new StateMachine((state, event) => {
@@ -329,7 +338,7 @@ export class Agent {
   }
 
   // ---- playback feedback from the renderer -----------------------------------------------
-  onPlaybackStarted(turnId: string, seq: number): void {
+  onPlaybackStarted(turnId: string, seq: number, emittedAt?: number): void {
     const t = this.turn
     if (!t || t.id !== turnId) return
     if (t.startedSeqs.size === 0) {
@@ -340,7 +349,8 @@ export class Agent {
       if (t.speechEndAt !== undefined) m.speechEndToAudioMs = now - t.speechEndAt
       if (t.speaker.firstSynthMs !== undefined) m.ttsFirstMs = t.speaker.firstSynthMs
       if (t.speaker.firstByteMs !== undefined) m.ttsFirstByteMs = t.speaker.firstByteMs
-      this.tr('turn.first_audio', { seq, ttfaMs: m.ttfaMs, speechEndToAudioMs: m.speechEndToAudioMs, ttsFirstMs: m.ttsFirstMs, ttsFirstByteMs: m.ttsFirstByteMs })
+      if (emittedAt !== undefined) m.rendererMs = Math.max(0, now - emittedAt)
+      this.tr('turn.first_audio', { seq, ttfaMs: m.ttfaMs, speechEndToAudioMs: m.speechEndToAudioMs, ttsFirstMs: m.ttsFirstMs, ttsFirstByteMs: m.ttsFirstByteMs, rendererMs: m.rendererMs })
       if (t.assistant) {
         t.assistant.metrics = m
         this.upsert(t.assistant)
@@ -432,7 +442,7 @@ export class Agent {
         emit: (chunk) => {
           if (this.turn?.id !== turnId) return
           this.turn.chunks.set(chunk.seq, { seq: chunk.seq, text: chunk.text, kind: chunk.kind })
-          this.deps.emitAudio(chunk)
+          this.deps.emitAudio({ ...chunk, emittedAt: Date.now() })
         },
         onDegraded: () => this.toast('warn', 'Edge TTS is failing; using the system voice for now.'),
         log: this.deps.log,
@@ -938,8 +948,8 @@ export class Agent {
         this.messages.splice(reply, 0, m)
       } else this.messages.push(m)
     } else this.messages.push(m)
-    this.deps.store.saveMessage(m)
-    this.deps.emit({ type: 'message', message: m })
+    if (m.streaming) this.flusher.push(m.id, m)
+    else this.flusher.now(m.id, m)
   }
 
   private toast(kind: 'info' | 'warn' | 'error', text: string): void {

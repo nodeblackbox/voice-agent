@@ -10,7 +10,7 @@ export function percentile(values: number[], q: number): number | null {
   return Math.round(v)
 }
 
-export const LATENCY_KEYS = ['asrMs', 'ttftMs', 'ttfsMs', 'ttsFirstMs', 'ttfaMs', 'speechEndToAudioMs', 'totalMs'] as const
+export const LATENCY_KEYS = ['asrMs', 'ttftMs', 'ttfsMs', 'ttsFirstMs', 'rendererMs', 'ttfaMs', 'speechEndToAudioMs', 'totalMs'] as const
 
 export function summarize(list: TurnMetrics[]): SessionSummary {
   const latency: SessionSummary['latency'] = {}

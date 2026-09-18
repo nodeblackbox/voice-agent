@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Brain, Check, Copy, Keyboard, Mic, Scissors, Square, Volume2, Zap } from 'lucide-react'
 import type { ChatMessage, UserTiming } from '@shared/types'
 import { T } from '../../theme'
@@ -7,6 +7,12 @@ import { Bars } from '../primitives'
 import { ToolPill } from './ToolPill'
 import { formatTokens } from '../../lib/format'
 import { splitBySentences, splitInterrupted } from '../../lib/spoken'
+
+/**
+ * Only this many of the newest messages are mounted. A long session has hundreds of bubbles, and
+ * mounting them all made every streamed token a full-transcript render that starved audio playback.
+ */
+const RENDER_WINDOW = 80
 
 const secs = (ms: number): string => `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)} s`
 
@@ -50,33 +56,45 @@ function TimingChips({ t }: { t: UserTiming }) {
   return <div className="flex flex-wrap gap-1 justify-end pr-1">{chips}</div>
 }
 
-function UserBubble({ m }: { m: ChatMessage }) {
+const UserBubble = memo(function UserBubble({ m, gapMs }: { m: ChatMessage; gapMs: number | null }) {
   return (
-    <div className="self-end flex flex-col gap-1 va-fade" style={{ maxWidth: '70%' }}>
-      <div className="px-4 py-3 text-sm flex items-start gap-2" style={{ background: T.raised, borderRadius: '16px 16px 4px 16px', lineHeight: 1.5 }}>
-        {m.via === 'voice' ? (
-          <Mic size={12} style={{ color: T.text2, flexShrink: 0, marginTop: 4 }} />
-        ) : (
-          <Keyboard size={12} style={{ color: T.text2, flexShrink: 0, marginTop: 4 }} />
-        )}
-        <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: m.streaming ? T.text2 : T.text }}>
-          {m.text}
-          {m.streaming && (
-            <span className="va-pulse" style={{ color: T.text3 }}>
-              {' ▍'}
-            </span>
-          )}
+    <div className="flex flex-col gap-2 items-end">
+      {gapMs !== null && (
+        <span className="self-center text-xs" style={{ color: T.text3, fontFamily: T.mono }} title="quiet time between the reply finishing and you speaking">
+          · {secs(gapMs)} later
         </span>
+      )}
+      <div className="self-end flex flex-col gap-1 va-fade" style={{ maxWidth: '70%' }}>
+        <div className="px-4 py-3 text-sm flex items-start gap-2" style={{ background: T.raised, borderRadius: '16px 16px 4px 16px', lineHeight: 1.5 }}>
+          {m.via === 'voice' ? (
+            <Mic size={12} style={{ color: T.text2, flexShrink: 0, marginTop: 4 }} />
+          ) : (
+            <Keyboard size={12} style={{ color: T.text2, flexShrink: 0, marginTop: 4 }} />
+          )}
+          <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: m.streaming ? T.text2 : T.text }}>
+            {m.text}
+            {m.streaming && (
+              <span className="va-pulse" style={{ color: T.text3 }}>
+                {' ▍'}
+              </span>
+            )}
+          </span>
+        </div>
+        {m.timing && <TimingChips t={m.timing} />}
       </div>
-      {m.timing && <TimingChips t={m.timing} />}
     </div>
   )
-}
+})
 
-/** Reply text with the sentence being spoken highlighted, spoken ones plain, upcoming ones dimmed. */
+/**
+ * Reply text with the sentence being spoken highlighted, spoken ones plain, upcoming ones dimmed.
+ * Subscriptions are scoped to this turn so a bubble that is not playing never re-renders when
+ * another one does.
+ */
 function ReplyText({ m }: { m: ChatMessage }) {
-  const speaking = useStore((s) => s.speaking)
+  const live = useStore((s) => (s.speaking && s.speaking.turnId === m.turnId ? s.speaking.seq : null))
   const chunks = useStore((s) => s.chunkTexts[m.turnId])
+  const spans = useMemo(() => (m.text && !m.interrupted ? splitBySentences(m.text, chunks ?? [], live) : null), [m.text, m.interrupted, chunks, live])
   if (!m.text) return m.streaming ? <span style={{ color: T.text3 }}>…</span> : null
 
   if (m.interrupted) {
@@ -94,11 +112,10 @@ function ReplyText({ m }: { m: ChatMessage }) {
         </>
       )
     }
+    return <>{m.text}</>
   }
 
-  const live = speaking && speaking.turnId === m.turnId ? speaking.seq : null
-  const spans = splitBySentences(m.text, chunks ?? [], live)
-  if (spans.length === 1 && spans[0]!.state === 'plain') return <>{m.text}</>
+  if (!spans || (spans.length === 1 && spans[0]!.state === 'plain')) return <>{m.text}</>
   return (
     <>
       {spans.map((s, i) => {
@@ -119,7 +136,7 @@ function ReplyText({ m }: { m: ChatMessage }) {
   )
 }
 
-function AssistantBubble({
+const AssistantBubble = memo(function AssistantBubble({
   m,
   speaking,
   onSpeak,
@@ -127,7 +144,7 @@ function AssistantBubble({
 }: {
   m: ChatMessage
   speaking: boolean
-  onSpeak: () => void
+  onSpeak: (id: string) => void
   onStop: () => void
 }) {
   const [copied, setCopied] = useState(false)
@@ -164,7 +181,7 @@ function AssistantBubble({
       <div className="flex items-center gap-1 pl-1">
         <button
           aria-label={speaking ? 'Stop' : 'Read aloud'}
-          onClick={speaking ? onStop : onSpeak}
+          onClick={speaking ? onStop : () => onSpeak(m.id)}
           className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs"
           style={{ color: speaking ? T.cyan : T.text3, background: 'transparent', border: 'none', cursor: 'pointer' }}
         >
@@ -202,7 +219,7 @@ function AssistantBubble({
       </div>
     </div>
   )
-}
+})
 
 function MemoryConfirmChip() {
   const pending = useStore((s) => s.pendingSave)
@@ -225,7 +242,7 @@ function MemoryConfirmChip() {
 }
 
 /** A quiet gap between the previous reply finishing and the user speaking again. */
-function pauseBefore(messages: ChatMessage[], index: number): number | null {
+export function pauseBefore(messages: ChatMessage[], index: number): number | null {
   const m = messages[index]
   if (!m || m.role !== 'user' || !m.timing?.speechEndAt || m.timing.speechMs === undefined) return null
   for (let i = index - 1; i >= 0; i--) {
@@ -244,7 +261,9 @@ export function Transcript() {
   const agentState = useStore((s) => s.agentState)
   const partial = useStore((s) => s.partial)
   const listening = useStore((s) => s.listening)
+  const activeSessionId = useStore((s) => s.activeSessionId)
   const [readingId, setReadingId] = useState<string | null>(null)
+  const [extraShown, setExtraShown] = useState(0)
   const scrollRef = useRef<HTMLDivElement>(null)
   const pinned = useRef(true)
 
@@ -252,10 +271,14 @@ export function Transcript() {
     if (agentState !== 'speaking' && agentState !== 'thinking' && agentState !== 'tool') setReadingId(null)
   }, [agentState])
 
+  useEffect(() => setExtraShown(0), [activeSessionId])
+
+  const last = messages[messages.length - 1]
+  const lastKey = last ? `${last.id}:${last.text.length}:${last.streaming ? 1 : 0}` : ''
   useEffect(() => {
     const el = scrollRef.current
     if (el && pinned.current) el.scrollTop = el.scrollHeight
-  }, [messages, partial, agentState])
+  }, [messages.length, lastKey, partial, agentState])
 
   const onScroll = () => {
     const el = scrollRef.current
@@ -263,17 +286,23 @@ export function Transcript() {
     pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
   }
 
-  const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
-  const speakingId = readingId ?? (agentState === 'speaking' ? (lastAssistant?.id ?? null) : null)
+  const lastAssistantId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) if (messages[i]!.role === 'assistant') return messages[i]!.id
+    return null
+  }, [messages])
+  const speakingId = readingId ?? (agentState === 'speaking' ? lastAssistantId : null)
 
-  const speak = (id: string) => {
+  const speak = useCallback((id: string) => {
     setReadingId(id)
     void window.api.speak.message(id)
-  }
-  const stop = () => {
+  }, [])
+  const stop = useCallback(() => {
     setReadingId(null)
     void window.api.speak.stop()
-  }
+  }, [])
+
+  const from = Math.max(0, messages.length - RENDER_WINDOW - extraShown)
+  const hidden = from
 
   return (
     <div ref={scrollRef} onScroll={onScroll} className="va-scroll flex-1 overflow-y-auto px-6 pt-6" style={{ paddingBottom: 200 }}>
@@ -285,23 +314,21 @@ export function Transcript() {
             <span style={{ fontFamily: T.mono }}>Ctrl+Shift+Space</span> toggles the microphone from anywhere.
           </div>
         )}
+        {hidden > 0 && (
+          <button
+            className="self-center text-xs rounded-full px-3 py-1.5"
+            style={{ color: T.text3, background: T.raised, border: `1px solid ${T.border}`, cursor: 'pointer' }}
+            onClick={() => setExtraShown((n) => n + RENDER_WINDOW)}
+            title="older messages are kept but not rendered, so a long session stays responsive"
+          >
+            Show {Math.min(hidden, RENDER_WINDOW)} earlier ({hidden} hidden)
+          </button>
+        )}
         {messages.map((m, i) => {
+          if (i < from) return null
           if (m.role === 'tool' && m.tool) return <ToolPill key={m.id} tool={m.tool} />
-          if (m.role === 'user') {
-            const gap = pauseBefore(messages, i)
-            return (
-              <div key={m.id} className="flex flex-col gap-2 items-end">
-                {gap !== null && (
-                  <span className="self-center text-xs" style={{ color: T.text3, fontFamily: T.mono }} title="quiet time between the reply finishing and you speaking">
-                    · {secs(gap)} later
-                  </span>
-                )}
-                <UserBubble m={m} />
-              </div>
-            )
-          }
-          if (m.role === 'assistant')
-            return <AssistantBubble key={m.id} m={m} speaking={speakingId === m.id} onSpeak={() => speak(m.id)} onStop={stop} />
+          if (m.role === 'user') return <UserBubble key={m.id} m={m} gapMs={pauseBefore(messages, i)} />
+          if (m.role === 'assistant') return <AssistantBubble key={m.id} m={m} speaking={speakingId === m.id} onSpeak={speak} onStop={stop} />
           return null
         })}
         <MemoryConfirmChip />

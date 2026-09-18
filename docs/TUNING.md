@@ -30,8 +30,12 @@ you stop talking ──minSilenceMs──▶ Smart Turn checks every checkEveryM
 ```
 
 `speechEndToAudioMs` is the number humans feel. Roughly: `minSilenceMs` + one or two Smart Turn
-checks + `asrMs` + `ttftMs` + time to the first sentence break + Edge TTS first byte. Everything in
-this document either shortens one of those stages or protects against cutting you off.
+checks + `asrMs` + `ttftMs` + time to the first sentence break + Edge TTS first byte + `rendererMs`
+(the UI decoding and scheduling the first chunk; normally 20–60 ms). Everything in this document
+either shortens one of those stages or protects against cutting you off. If `rendererMs` climbs past
+~150 ms the transcript is too busy to play audio on time: only the newest 80 messages are mounted and
+streaming updates are batched (`uiFlushMs`), so a rising value now points at something else hogging
+the renderer (DevTools, an extension, a huge tool result).
 
 ## Ears: turn taking (`endpoint`)
 
@@ -84,6 +88,7 @@ ducked and bargeInReleaseChunks quiet frames → release: it was a backchannel, 
 | `toolStallTimeoutMs` | 25000 | 25000 | Same, while a tool call is in flight. |
 | `retryBackoffMs` | 400 | 400 | Pause before the same-model retry on a transient error. |
 | `maxStepsAsk` / `maxStepsAgent` | 4 / 8 | — | Tool rounds per turn by mode (a recall plus a few memory edits needs three or four). Hitting the cap before the model said anything is spoken ("I've hit my limit for tool calls this turn…") and traced as `hitStepLimit`. |
+| `uiFlushMs` | 40 | — | How often a streaming reply is pushed to the transcript and saved while tokens arrive. Per-token pushes made every token a full re-render, which starved audio playback after an hour of chat (`rendererMs` grew to 3 s). 0 = every token. |
 | `historyMessages` | 40 | — | Most recent messages sent to the model. |
 | `minUtteranceChars` | 2 | — | Transcripts shorter than this are dropped without a turn. |
 | `toolResultKeepChars` | 700 | 700 | Characters of each tool result kept in history for later turns. The model already consumed the full result when it ran; this keeps later turns lean. |

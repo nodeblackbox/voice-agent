@@ -22,6 +22,8 @@ type SinkCapableContext = AudioContext & { setSinkId?: (id: string) => Promise<v
 
 let gapS = DEFAULT_TUNING.playback.gapMs / 1000
 const FIRST_GAP_S = 0.005
+/** Arrival -> scheduled later than this is logged: the UI thread starved the audio path. */
+const LATE_SCHEDULE_MS = 250
 let rampS = DEFAULT_TUNING.playback.duckRampMs / 1000
 
 let ctx: SinkCapableContext | null = null
@@ -134,16 +136,20 @@ async function pump(turnId: string, t: TurnQueue): Promise<void> {
         }
         src.start(start)
         t.nextTime = start + item.buffer.duration
+        if (item.receivedAt !== undefined) {
+          const lateMs = Math.round(performance.now() - item.receivedAt)
+          if (lateMs > LATE_SCHEDULE_MS) rlog('warn', 'playback', `seq ${item.seq} scheduled ${lateMs} ms after it arrived; the UI thread is busy`)
+        }
         setTimeout(() => {
           if (t.queue.cancelled) return
-          window.api.playback.started(turnId, item.seq)
+          window.api.playback.started(turnId, item.seq, item.emittedAt)
           setSpeaking({ turnId, seq: item.seq, text: item.text, kind: t.kinds.get(item.seq) ?? 'speech' })
         }, (start - c.currentTime) * 1000)
       } else {
         // wait for scheduled audio to finish so ordering and drained() stay truthful
         await wait((t.nextTime - c.currentTime) * 1000)
         if (t.queue.cancelled) return
-        window.api.playback.started(turnId, item.seq)
+        window.api.playback.started(turnId, item.seq, item.emittedAt)
         if (!isTerminalMarker(item)) {
           setSpeaking({ turnId, seq: item.seq, text: item.text, kind: t.kinds.get(item.seq) ?? 'speech' })
           await speakWithSystemVoice(item.text)
@@ -158,6 +164,7 @@ async function pump(turnId: string, t: TurnQueue): Promise<void> {
 }
 
 async function handleChunk(chunk: AudioChunk): Promise<void> {
+  const receivedAt = performance.now()
   const t = getTurn(chunk.turnId)
   if (t.queue.cancelled) return
   t.kinds.set(chunk.seq, chunk.kind)
@@ -175,8 +182,8 @@ async function handleChunk(chunk: AudioChunk): Promise<void> {
   const item: QueuedChunk<AudioBuffer> =
     !buffer && chunk.mp3.byteLength > 0
       ? // undecodable audio: skip the sentence but keep the sequence moving
-        { seq: chunk.seq, text: '', last: chunk.last, buffer: null }
-      : { seq: chunk.seq, text: chunk.text, last: chunk.last, buffer }
+        { seq: chunk.seq, text: '', last: chunk.last, buffer: null, emittedAt: chunk.emittedAt, receivedAt }
+      : { seq: chunk.seq, text: chunk.text, last: chunk.last, buffer, emittedAt: chunk.emittedAt, receivedAt }
   t.queue.push(item)
   void pump(chunk.turnId, t)
 }

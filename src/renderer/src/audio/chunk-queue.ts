@@ -7,6 +7,10 @@ export interface QueuedChunk<B> {
   text: string
   last: boolean
   buffer: B | null
+  /** Main-process emit time, echoed back on `started` so main can time the renderer stage. */
+  emittedAt?: number
+  /** Renderer clock when the chunk arrived, to spot a starved main thread. */
+  receivedAt?: number
 }
 
 export class ChunkQueue<B = unknown> {

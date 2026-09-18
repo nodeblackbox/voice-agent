@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { memo, useEffect, useState } from 'react'
 import { BookOpen, Brain, ChevronDown, ChevronRight, Clock, ExternalLink, Globe, Plug, Wrench, type LucideIcon } from 'lucide-react'
 import type { ToolActivity, ToolSource } from '@shared/types'
 import { T } from '../../theme'
@@ -46,7 +46,7 @@ function SourceChip({ source }: { source: ToolSource }) {
   )
 }
 
-export function ToolPill({ tool }: { tool: ToolActivity }) {
+export const ToolPill = memo(function ToolPill({ tool }: { tool: ToolActivity }) {
   const elapsed = useElapsedMs(tool.startedAt, tool.endedAt)
   const [open, setOpen] = useState(true)
   const Icon = ICONS[tool.kind] ?? Wrench
@@ -106,7 +106,7 @@ export function ToolPill({ tool }: { tool: ToolActivity }) {
       {tool.diff && <MemoryDiff before={tool.diff.before} after={tool.diff.after} />}
     </div>
   )
-}
+})
 
 /** Word-level diff of a memory edit: removed words struck through in red, added words in green. */
 export function wordDiff(before: string, after: string): Array<{ text: string; kind: 'same' | 'removed' | 'added' }> {

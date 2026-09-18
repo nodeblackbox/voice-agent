@@ -54,7 +54,8 @@ export interface VoiceAgentApi {
     voices(): Promise<VoiceInfo[]>
   }
   playback: {
-    started(turnId: string, seq: number): void
+    /** `emittedAt` is the chunk's main-process emit time, echoed back so main can time the renderer stage. */
+    started(turnId: string, seq: number, emittedAt?: number): void
     finished(turnId: string, seq: number): void
     /** The chunk that was playing when the turn was cancelled, and how far into it the cut landed. */
     cancelled(turnId: string, seq: number, offsetS: number, durationS: number): void

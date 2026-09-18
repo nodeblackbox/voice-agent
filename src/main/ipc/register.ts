@@ -79,7 +79,7 @@ export function registerIpc(d: IpcDeps): void {
   h(IPC.ttsPreview, (_e, voice: string) => d.agent.preview(voice))
   h(IPC.voicesList, () => d.agent.voices())
 
-  ipcMain.on(IPC.playbackStarted, (_e, turnId: string, seq: number) => d.agent.onPlaybackStarted(turnId, seq))
+  ipcMain.on(IPC.playbackStarted, (_e, turnId: string, seq: number, emittedAt?: number) => d.agent.onPlaybackStarted(turnId, seq, typeof emittedAt === 'number' ? emittedAt : undefined))
   ipcMain.on(IPC.playbackFinished, (_e, turnId: string, seq: number) => d.agent.onPlaybackFinished(turnId, seq))
   ipcMain.on(IPC.playbackCancelled, (_e, turnId: string, seq: number, offsetS: number, durationS: number) => d.agent.onPlaybackCancelled(turnId, seq, offsetS, durationS))
   ipcMain.on(IPC.playbackDrained, (_e, turnId: string) => d.agent.onPlaybackDrained(turnId))

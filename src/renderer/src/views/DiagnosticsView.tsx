@@ -104,6 +104,7 @@ const LATENCY_LABELS: Record<string, string> = {
   ttftMs: 'first token',
   ttfsMs: 'first sentence',
   ttsFirstMs: 'TTS first sentence',
+  rendererMs: 'UI decode + schedule',
   ttfaMs: 'turn → audio',
   speechEndToAudioMs: 'speech end → audio',
   totalMs: 'turn total'
