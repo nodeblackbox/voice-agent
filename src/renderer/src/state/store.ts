@@ -17,8 +17,9 @@ import type {
   Toast,
   TurnMetrics
 } from '@shared/types'
-import { playback } from '../audio/playback'
+import { playback, type Speaking } from '../audio/playback'
 import { cue } from '../audio/cue'
+import type { ChunkText } from '../lib/spoken'
 import { listDevices, pickDefaults } from '../audio/devices'
 import { rlog } from '../lib/rlog'
 
@@ -73,6 +74,10 @@ interface Store {
   muted: boolean
   memoryVersion: number
   mcpVersion: number
+  /** The sentence being played right now, for the live highlight in the transcript. */
+  speaking: Speaking | null
+  /** Sentence chunks per turn (last few turns), for mapping reply text to audio. */
+  chunkTexts: Record<string, ChunkText[]>
 
   init(): Promise<void>
   setView(v: View): void
@@ -125,12 +130,23 @@ export const useStore = create<Store>((set, get) => ({
   muted: readBool(MUTED_KEY, false),
   memoryVersion: 0,
   mcpVersion: 0,
+  speaking: null,
+  chunkTexts: {},
 
   async init() {
     if (initialised) return
     initialised = true
     playback.subscribe()
     playback.setMuted(get().muted)
+    playback.onSpeaking((s) => set({ speaking: s }))
+    playback.onChunk((turnId, chunk) => {
+      const all = { ...get().chunkTexts }
+      const list = [...(all[turnId] ?? []).filter((c) => c.seq !== chunk.seq), chunk].sort((a, b) => a.seq - b.seq)
+      all[turnId] = list
+      const keys = Object.keys(all)
+      for (const k of keys.slice(0, Math.max(0, keys.length - 8))) delete all[k]
+      set({ chunkTexts: all })
+    })
 
     window.api.onEvent((e: AgentEvent) => {
       switch (e.type) {

@@ -1,24 +1,121 @@
-import { useEffect, useRef, useState } from 'react'
-import { Brain, Check, Copy, Keyboard, Mic, Square, Volume2 } from 'lucide-react'
-import type { ChatMessage } from '@shared/types'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { Brain, Check, Copy, Keyboard, Mic, Scissors, Square, Volume2, Zap } from 'lucide-react'
+import type { ChatMessage, UserTiming } from '@shared/types'
 import { T } from '../../theme'
 import { useStore } from '../../state/store'
 import { Bars } from '../primitives'
 import { ToolPill } from './ToolPill'
 import { formatTokens } from '../../lib/format'
+import { splitBySentences, splitInterrupted } from '../../lib/spoken'
+
+const secs = (ms: number): string => `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)} s`
+
+function Chip({ children, color, title }: { children: ReactNode; color?: string; title?: string }) {
+  return (
+    <span className="inline-flex items-center gap-1 text-xs rounded px-1.5 py-0.5" style={{ background: T.raised, color: color ?? T.text3, fontFamily: T.mono }} title={title}>
+      {children}
+    </span>
+  )
+}
+
+/** How the ears closed this turn, as small chips under the user's bubble. */
+function TimingChips({ t }: { t: UserTiming }) {
+  const chips: ReactNode[] = []
+  if (t.speechMs !== undefined) chips.push(<Chip key="len" title="how long you spoke">{secs(t.speechMs)}</Chip>)
+  if (t.endReason === 'done') {
+    chips.push(
+      <Chip key="end" title="Smart Turn ended the turn: pause length and its confidence that you were done">
+        pause {t.silenceMs ?? 0} ms{t.turnP !== undefined && t.turnP !== null ? ` · p ${t.turnP.toFixed(2)}` : ''}
+      </Chip>
+    )
+  } else if (t.endReason === 'timeout') {
+    const cap = t.capMs ?? undefined
+    const label = cap !== undefined && cap >= 60_000 ? 'max length' : cap !== undefined ? `waited ${secs(cap)}` : 'timeout'
+    chips.push(
+      <Chip key="end" color={T.amber} title="the turn ended on a hard cap, not on Smart Turn: you were probably still going (see docs/TUNING.md)">
+        {label}{t.turnP !== undefined && t.turnP !== null ? ` · p ${t.turnP.toFixed(2)}` : ''}
+      </Chip>
+    )
+  }
+  if (t.merged) chips.push(<Chip key="merged" color={T.cyan} title="you kept talking after a pause; the pieces were joined into one turn">merged{t.parts ? ` ${t.parts} parts` : ''}</Chip>)
+  if (t.segments) chips.push(<Chip key="seg" title="a long monologue transcribed in segments while you spoke">{t.segments + 1} segments</Chip>)
+  if (t.cutAgent) {
+    chips.push(
+      <Chip key="cut" color={T.amber} title="this utterance interrupted the agent">
+        <Zap size={10} /> cut in
+      </Chip>
+    )
+  }
+  if (!chips.length) return null
+  return <div className="flex flex-wrap gap-1 justify-end pr-1">{chips}</div>
+}
 
 function UserBubble({ m }: { m: ChatMessage }) {
   return (
-    <div className="self-end va-fade" style={{ maxWidth: '70%' }}>
+    <div className="self-end flex flex-col gap-1 va-fade" style={{ maxWidth: '70%' }}>
       <div className="px-4 py-3 text-sm flex items-start gap-2" style={{ background: T.raised, borderRadius: '16px 16px 4px 16px', lineHeight: 1.5 }}>
         {m.via === 'voice' ? (
           <Mic size={12} style={{ color: T.text2, flexShrink: 0, marginTop: 4 }} />
         ) : (
           <Keyboard size={12} style={{ color: T.text2, flexShrink: 0, marginTop: 4 }} />
         )}
-        <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.text}</span>
+        <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: m.streaming ? T.text2 : T.text }}>
+          {m.text}
+          {m.streaming && (
+            <span className="va-pulse" style={{ color: T.text3 }}>
+              {' ▍'}
+            </span>
+          )}
+        </span>
       </div>
+      {m.timing && <TimingChips t={m.timing} />}
     </div>
+  )
+}
+
+/** Reply text with the sentence being spoken highlighted, spoken ones plain, upcoming ones dimmed. */
+function ReplyText({ m }: { m: ChatMessage }) {
+  const speaking = useStore((s) => s.speaking)
+  const chunks = useStore((s) => s.chunkTexts[m.turnId])
+  if (!m.text) return m.streaming ? <span style={{ color: T.text3 }}>…</span> : null
+
+  if (m.interrupted) {
+    const split = splitInterrupted(m.text, m.spokenText, m.unspokenText)
+    if (split) {
+      return (
+        <>
+          {split.heard}
+          <span title="you cut in here" style={{ color: T.amber, margin: '0 4px', verticalAlign: 'middle', display: 'inline-flex' }}>
+            <Scissors size={11} />
+          </span>
+          <span style={{ color: T.text3 }} title="generated but never spoken">
+            {split.rest}
+          </span>
+        </>
+      )
+    }
+  }
+
+  const live = speaking && speaking.turnId === m.turnId ? speaking.seq : null
+  const spans = splitBySentences(m.text, chunks ?? [], live)
+  if (spans.length === 1 && spans[0]!.state === 'plain') return <>{m.text}</>
+  return (
+    <>
+      {spans.map((s, i) => {
+        if (s.state === 'current') {
+          return (
+            <span key={i} style={{ color: T.text, background: T.cyanTint, boxShadow: `inset 3px 0 0 ${T.cyan}`, paddingLeft: 4, marginLeft: -4, borderRadius: 3 }}>
+              {s.text}
+            </span>
+          )
+        }
+        return (
+          <span key={i} style={{ color: s.state === 'upcoming' ? T.text3 : T.text }}>
+            {s.text}
+          </span>
+        )
+      })}
+    </>
   )
 }
 
@@ -43,6 +140,7 @@ function AssistantBubble({
     setCopied(true)
     setTimeout(() => setCopied(false), 1200)
   }
+  const interruptedTitle = m.interrupted ? `heard: "${m.spokenText ?? ''}"\nnot heard: "${m.unspokenText ?? ''}"` : undefined
   return (
     <div className="self-start flex flex-col gap-1.5 va-fade" style={{ maxWidth: '70%' }}>
       <div
@@ -56,7 +154,7 @@ function AssistantBubble({
           wordBreak: 'break-word'
         }}
       >
-        {m.text || (m.streaming ? <span style={{ color: T.text3 }}>…</span> : '')}
+        <ReplyText m={m} />
         {m.streaming && m.text && (
           <span className="va-pulse" style={{ color: T.text3 }}>
             {' ▍'}
@@ -83,7 +181,7 @@ function AssistantBubble({
           {copied && <span>copied</span>}
         </button>
         {m.interrupted && (
-          <span className="inline-flex items-center gap-1 text-xs rounded px-1.5 py-0.5 ml-1" style={{ color: T.amber, background: T.amberTint }}>
+          <span className="inline-flex items-center gap-1 text-xs rounded px-1.5 py-0.5 ml-1" style={{ color: T.amber, background: T.amberTint }} title={interruptedTitle}>
             <Square size={9} /> interrupted
           </span>
         )}
@@ -125,6 +223,21 @@ function MemoryConfirmChip() {
       </button>
     </div>
   )
+}
+
+/** A quiet gap between the previous reply finishing and the user speaking again. */
+function pauseBefore(messages: ChatMessage[], index: number): number | null {
+  const m = messages[index]
+  if (!m || m.role !== 'user' || !m.timing?.speechEndAt || m.timing.speechMs === undefined) return null
+  for (let i = index - 1; i >= 0; i--) {
+    const p = messages[i]!
+    if (p.role !== 'assistant') continue
+    const end = p.createdAt + (p.metrics?.totalMs ?? 0)
+    const start = m.timing.speechEndAt - m.timing.speechMs
+    const gap = start - end
+    return gap >= 1500 ? gap : null
+  }
+  return null
 }
 
 export function Transcript() {
@@ -173,9 +286,21 @@ export function Transcript() {
             <span style={{ fontFamily: T.mono }}>Ctrl+Shift+Space</span> toggles the microphone from anywhere.
           </div>
         )}
-        {messages.map((m) => {
+        {messages.map((m, i) => {
           if (m.role === 'tool' && m.tool) return <ToolPill key={m.id} tool={m.tool} />
-          if (m.role === 'user') return <UserBubble key={m.id} m={m} />
+          if (m.role === 'user') {
+            const gap = pauseBefore(messages, i)
+            return (
+              <div key={m.id} className="flex flex-col gap-2 items-end">
+                {gap !== null && (
+                  <span className="self-center text-xs" style={{ color: T.text3, fontFamily: T.mono }} title="quiet time between the reply finishing and you speaking">
+                    · {secs(gap)} later
+                  </span>
+                )}
+                <UserBubble m={m} />
+              </div>
+            )
+          }
           if (m.role === 'assistant')
             return <AssistantBubble key={m.id} m={m} speaking={speakingId === m.id} onSpeak={() => speak(m.id)} onStop={stop} />
           return null

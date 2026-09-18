@@ -14,6 +14,7 @@ interface TurnQueue {
   nextTime: number
   sources: Set<AudioBufferSourceNode>
   live: Map<AudioBufferSourceNode, LiveSource>
+  kinds: Map<number, AudioChunk['kind']>
   pumping: boolean
 }
 
@@ -28,6 +29,25 @@ let muted = false
 let duck = 1
 const turns = new Map<string, TurnQueue>()
 let unsubscribed = false
+
+export interface Speaking {
+  turnId: string
+  seq: number
+  text: string
+  kind: AudioChunk['kind']
+}
+
+/** What the transcript needs to show where the voice is: chunk texts per turn and the chunk playing now. */
+const speakingListeners = new Set<(s: Speaking | null) => void>()
+const chunkListeners = new Set<(turnId: string, chunk: { seq: number; text: string; kind: AudioChunk['kind'] }) => void>()
+let speakingNow: Speaking | null = null
+
+function setSpeaking(s: Speaking | null): void {
+  if (s === null && speakingNow === null) return
+  if (s && speakingNow && s.turnId === speakingNow.turnId && s.seq === speakingNow.seq) return
+  speakingNow = s
+  for (const fn of speakingListeners) fn(s)
+}
 
 function ensure(): SinkCapableContext {
   if (ctx) {
@@ -55,7 +75,7 @@ function applyGain(): void {
 function getTurn(turnId: string): TurnQueue {
   let t = turns.get(turnId)
   if (!t) {
-    t = { queue: new ChunkQueue<AudioBuffer>(), nextTime: 0, sources: new Set(), live: new Map(), pumping: false }
+    t = { queue: new ChunkQueue<AudioBuffer>(), nextTime: 0, sources: new Set(), live: new Map(), kinds: new Map(), pumping: false }
     turns.set(turnId, t)
   }
   return t
@@ -64,9 +84,11 @@ function getTurn(turnId: string): TurnQueue {
 function markFinished(turnId: string, t: TurnQueue, seq: number): void {
   if (t.queue.cancelled) return
   window.api.playback.finished(turnId, seq)
+  if (speakingNow?.turnId === turnId && speakingNow.seq === seq) setSpeaking(null)
   if (t.queue.isLast(seq)) {
     window.api.playback.drained(turnId)
     turns.delete(turnId)
+    setSpeaking(null)
   }
 }
 
@@ -110,14 +132,19 @@ async function pump(turnId: string, t: TurnQueue): Promise<void> {
         src.start(start)
         t.nextTime = start + item.buffer.duration
         setTimeout(() => {
-          if (!t.queue.cancelled) window.api.playback.started(turnId, item.seq)
+          if (t.queue.cancelled) return
+          window.api.playback.started(turnId, item.seq)
+          setSpeaking({ turnId, seq: item.seq, text: item.text, kind: t.kinds.get(item.seq) ?? 'speech' })
         }, (start - c.currentTime) * 1000)
       } else {
         // wait for scheduled audio to finish so ordering and drained() stay truthful
         await wait((t.nextTime - c.currentTime) * 1000)
         if (t.queue.cancelled) return
         window.api.playback.started(turnId, item.seq)
-        if (!isTerminalMarker(item)) await speakWithSystemVoice(item.text)
+        if (!isTerminalMarker(item)) {
+          setSpeaking({ turnId, seq: item.seq, text: item.text, kind: t.kinds.get(item.seq) ?? 'speech' })
+          await speakWithSystemVoice(item.text)
+        }
         t.nextTime = c.currentTime
         markFinished(turnId, t, item.seq)
       }
@@ -130,6 +157,8 @@ async function pump(turnId: string, t: TurnQueue): Promise<void> {
 async function handleChunk(chunk: AudioChunk): Promise<void> {
   const t = getTurn(chunk.turnId)
   if (t.queue.cancelled) return
+  t.kinds.set(chunk.seq, chunk.kind)
+  if (chunk.text) for (const fn of chunkListeners) fn(chunk.turnId, { seq: chunk.seq, text: chunk.text, kind: chunk.kind })
   let buffer: AudioBuffer | null = null
   if (chunk.mp3.byteLength > 0) {
     try {
@@ -170,7 +199,9 @@ function cancel(turnId: string | null): void {
     }
     t.sources.clear()
     turns.delete(id)
+    if (speakingNow?.turnId === id) setSpeaking(null)
   }
+  if (turnId === null) setSpeaking(null)
   if ('speechSynthesis' in window) window.speechSynthesis.cancel()
 }
 
@@ -218,6 +249,16 @@ export const playback = {
     }
   },
   cancel,
+  /** The chunk playing right now (null between turns); fires on every change. */
+  onSpeaking(fn: (s: Speaking | null) => void): () => void {
+    speakingListeners.add(fn)
+    return () => speakingListeners.delete(fn)
+  },
+  /** Every sentence chunk as it arrives, before it plays, so the transcript can map text to audio. */
+  onChunk(fn: (turnId: string, chunk: { seq: number; text: string; kind: AudioChunk['kind'] }) => void): () => void {
+    chunkListeners.add(fn)
+    return () => chunkListeners.delete(fn)
+  },
   get playing(): boolean {
     return turns.size > 0
   }

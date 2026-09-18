@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentEvent, ChatMessage, Settings } from '@shared/types'
 
 vi.mock('../audio/playback', () => ({
-  playback: { subscribe: vi.fn(), setMuted: vi.fn(), setDuck: vi.fn(), configure: vi.fn(), setOutput: vi.fn().mockResolvedValue(undefined), cancel: vi.fn(), playing: false }
+  playback: { subscribe: vi.fn(), setMuted: vi.fn(), setDuck: vi.fn(), configure: vi.fn(), setOutput: vi.fn().mockResolvedValue(undefined), cancel: vi.fn(), onSpeaking: vi.fn(), onChunk: vi.fn(), playing: false }
 }))
 vi.mock('../audio/cue', () => ({ cue: { start: vi.fn(), stop: vi.fn() } }))
 vi.mock('../audio/devices', () => ({ listDevices: vi.fn().mockRejectedValue(new Error('no devices')), pickDefaults: vi.fn() }))
