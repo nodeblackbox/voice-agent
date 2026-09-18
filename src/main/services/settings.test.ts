@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -39,6 +39,29 @@ describe('SettingsService', () => {
     expect(seen).toEqual(['en-GB-SoniaNeural'])
     const reloaded = new SettingsService(dir, env)
     expect(reloaded.get().voice.voice).toBe('en-GB-SoniaNeural')
+  })
+
+  it('writes only tuning values that differ from the defaults, and replaces superseded defaults at load', () => {
+    const s = new SettingsService(dir, env)
+    s.set({ endpoint: { ...s.get().endpoint, duckGain: 0.1 } })
+    const written = JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8')) as Record<string, Record<string, unknown>>
+    expect(written.endpoint).toEqual({ duckGain: 0.1 })
+    expect(written.brain).toEqual({})
+    expect(written.voice).toEqual(DEFAULT_SETTINGS.voice)
+
+    // a file written by an older build pins the old defaults; the user's own change survives
+    writeFileSync(
+      join(dir, 'settings.json'),
+      JSON.stringify({ endpoint: { maxSilenceMs: 1200, maxUtteranceMs: 30000, duckGain: 0.1 }, speech: { firstMinWords: 6 }, brain: { maxStepsAsk: 2, temperature: 0.3 } })
+    )
+    const old = new SettingsService(dir, env)
+    expect(old.get().endpoint.maxSilenceMs).toBe(DEFAULT_SETTINGS.endpoint.maxSilenceMs)
+    expect(old.get().endpoint.maxUtteranceMs).toBe(DEFAULT_SETTINGS.endpoint.maxUtteranceMs)
+    expect(old.get().speech.firstMinWords).toBe(DEFAULT_SETTINGS.speech.firstMinWords)
+    expect(old.get().brain.maxStepsAsk).toBe(DEFAULT_SETTINGS.brain.maxStepsAsk)
+    expect(old.get().endpoint.duckGain).toBe(0.1)
+    expect(old.get().brain.temperature).toBe(0.3)
+    expect(old.migrations.map((m) => `${m.group}.${m.key}`)).toEqual(['endpoint.maxSilenceMs', 'endpoint.maxUtteranceMs', 'brain.maxStepsAsk', 'speech.firstMinWords'])
   })
 
   it('reads keys from a .env file, including JSON key lists', () => {

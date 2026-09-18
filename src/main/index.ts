@@ -82,6 +82,10 @@ app.whenReady().then(async () => {
     transcripts: () => settings.get().runtime.logTranscripts
   })
   log('app', `starting (dev=${isDev}) root=${projectRoot} userData=${userData}`)
+  if (settings.migrations.length) {
+    log('settings', `migrated defaults: ${settings.migrations.map((m) => `${m.group}.${m.key} ${String(m.from)}→${String(m.to)}`).join(', ')}`)
+    trace({ ev: 'settings.migrated', migrated: settings.migrations })
+  }
 
   // Electron would show a modal "A JavaScript error occurred in the main process" and leave nothing
   // in our logs; record it with its stack, tell the user once, and keep running.

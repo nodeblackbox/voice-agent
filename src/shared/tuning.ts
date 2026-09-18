@@ -11,6 +11,12 @@ interface ParamBase {
   scope: TuningScope
   restart?: boolean
   old?: number | string | boolean
+  /**
+   * Defaults this parameter had in earlier builds. A stored value equal to one of them is treated as
+   * "never touched" and replaced by the current default at load, so a changed default reaches users
+   * whose settings file was written by the old build. Add the old value here whenever `default` changes.
+   */
+  superseded?: ReadonlyArray<number | string | boolean>
 }
 
 export interface NumberParam extends ParamBase {
@@ -53,7 +59,7 @@ const n = (
   scope: TuningScope,
   label: string,
   doc: string,
-  extra: { unit?: string; restart?: boolean; old?: number } = {}
+  extra: { unit?: string; restart?: boolean; old?: number; superseded?: readonly number[] } = {}
 ): NumberParam => ({ kind: 'number', default: def, min, max, step, scope, label, doc, ...extra })
 
 export const TUNING = {
@@ -61,7 +67,7 @@ export const TUNING = {
     vadThreshold: n(0.5, 0.2, 0.9, 0.05, 'ear', 'VAD threshold', 'Silero speech probability that opens an utterance while listening. Lower catches quiet speech but breaths and keyboard clicks start false turns.', { unit: 'p', old: 0.5 }),
     minSpeechMs: n(250, 100, 800, 50, 'ear', 'Min speech', 'Total speech needed before an utterance counts. Shorter bursts are blips: dropped silently, never sent to ASR.', { unit: 'ms', old: 250 }),
     minSilenceMs: n(250, 100, 800, 50, 'ear', 'Min silence', 'Silence before Smart Turn starts scoring. This is the floor of end-of-turn latency; below it the model never runs.', { unit: 'ms', old: 250 }),
-    maxSilenceMs: n(1500, 600, 4000, 100, 'ear', 'Max silence', 'Hard end of turn after this much silence while Smart Turn is unsure (score between the low and the done thresholds). Safety net so a mis-scoring model cannot hang a turn.', { unit: 'ms', old: 1200 }),
+    maxSilenceMs: n(1500, 600, 4000, 100, 'ear', 'Max silence', 'Hard end of turn after this much silence while Smart Turn is unsure (score between the low and the done thresholds). Safety net so a mis-scoring model cannot hang a turn.', { unit: 'ms', old: 1200, superseded: [1200] }),
     checkEveryMs: n(200, 100, 500, 50, 'ear', 'Check every', 'Minimum additional silence between Smart Turn checks. Each check costs 10-30 ms of CPU on the 8 s window.', { unit: 'ms', old: 200 }),
     turnThreshold: n(0.7, 0.4, 0.95, 0.05, 'ear', 'Turn threshold', 'Smart Turn probability below which the turn never ends. Raise if it cuts you off, lower if it waits too long after clear endings.', { unit: 'p', old: 0.7 }),
     turnHighThreshold: n(0.9, 0.6, 1, 0.05, 'ear', 'Turn high threshold', 'At or above this the turn ends even if the live partial ends on a filler word (um, so, and), except once per utterance when "Filler holds high tier" is on. Between the two thresholds a trailing filler always holds the turn open.', { unit: 'p', old: 0.9 }),
@@ -76,9 +82,9 @@ export const TUNING = {
     duckGain: n(0.25, 0, 1, 0.05, 'renderer', 'Duck gain', 'Playback volume while ducked, applied by the renderer with a short ramp.', { unit: 'x', old: 0.25 }),
     bargeInDecay: n(1, 0, 5, 1, 'ear', 'Barge-in decay', 'Credit lost per quiet frame. 1 means a natural mid-word VAD dip barely costs anything; a hard reset (old behaviour) never cut on real, fluttery speech.', { unit: 'credits', old: 1 }),
     bargeInReleaseChunks: n(6, 2, 20, 1, 'ear', 'Release chunks', 'Consecutive quiet frames after a duck before it is called a finished backchannel and volume is restored (6 = about 190 ms). Avoids duck/undock flicker inside one utterance.', { unit: 'frames', old: 6 }),
-    partialEveryMs: n(600, 300, 2000, 100, 'ear', 'Partials every', 'New audio between live partial transcripts. Partials drive the captions and the filler-word guard, so slower partials mean a staler guard.', { unit: 'ms', old: 600 }),
+    partialEveryMs: n(600, 300, 2000, 100, 'ear', 'Partials every', 'New audio between live partial transcripts. Partials drive the captions and the filler-word guard, so slower partials mean a staler guard.', { unit: 'ms', old: 600, superseded: [700] }),
     prerollMs: n(1000, 200, 2000, 100, 'ear', 'Preroll', 'Audio kept before speech is detected and prepended to the utterance so the first syllable is not clipped. Must exceed bargeInChunks x 32 ms or the first word after an interruption is lost.', { unit: 'ms', old: 1000 }),
-    maxUtteranceMs: n(120000, 10000, 300000, 5000, 'ear', 'Max utterance', 'Absolute cap on one utterance. Long monologues are transcribed in segments before this (see "Segment every"), so this only stops a stuck microphone.', { unit: 'ms', old: 30000 }),
+    maxUtteranceMs: n(120000, 10000, 300000, 5000, 'ear', 'Max utterance', 'Absolute cap on one utterance. Long monologues are transcribed in segments before this (see "Segment every"), so this only stops a stuck microphone.', { unit: 'ms', old: 30000, superseded: [30000] }),
     segmentEveryMs: n(30000, 10000, 120000, 5000, 'ear', 'Segment every', 'While you keep talking, the older part of the utterance is transcribed every this often and shown in your bubble; the turn does not end. Lower = your words appear sooner; each segment costs one decode.', { unit: 'ms' })
   },
   brain: {
@@ -86,7 +92,7 @@ export const TUNING = {
     stallTimeoutMs: n(8000, 2000, 30000, 500, 'core', 'Stall timeout', 'Abandon a reply that stops mid-stream for this long. What was already spoken is kept and the transcript says the response was cut short.', { unit: 'ms', old: 8000 }),
     toolStallTimeoutMs: n(25000, 5000, 120000, 1000, 'core', 'Tool stall timeout', 'Stall timeout while a tool call is in flight; searches and page reads legitimately take longer than token gaps.', { unit: 'ms', old: 25000 }),
     retryBackoffMs: n(400, 0, 3000, 100, 'core', 'Retry backoff', 'Pause before retrying the same model after a transient error (overloaded, 5xx).', { unit: 'ms', old: 400 }),
-    maxStepsAsk: n(4, 1, 8, 1, 'core', 'Max steps (Ask)', 'Tool rounds allowed per turn in Ask mode: a recall plus a couple of memory edits needs three or four. When the cap is hit before the model said anything, the agent says so instead of ending silently.', { unit: 'steps' }),
+    maxStepsAsk: n(4, 1, 8, 1, 'core', 'Max steps (Ask)', 'Tool rounds allowed per turn in Ask mode: a recall plus a couple of memory edits needs three or four. When the cap is hit before the model said anything, the agent says so instead of ending silently.', { unit: 'steps', superseded: [2] }),
     maxStepsAgent: n(8, 1, 20, 1, 'core', 'Max steps (Agent)', 'Tool rounds allowed per turn in Agent mode.', { unit: 'steps' }),
     historyMessages: n(40, 4, 200, 2, 'core', 'History messages', 'Most recent messages sent to the model each turn. Tool results inside them are compacted separately.', { unit: 'messages' }),
     minUtteranceChars: n(2, 1, 10, 1, 'core', 'Min utterance chars', 'Final transcripts shorter than this are dropped without a turn.', { unit: 'chars' }),
@@ -100,7 +106,7 @@ export const TUNING = {
     uiFlushMs: n(40, 0, 500, 10, 'core', 'UI flush interval', 'How often a streaming reply is pushed to the transcript and saved while tokens arrive. Every token used to be a full transcript re-render, which starved audio playback in long sessions. 0 = every token.', { unit: 'ms' })
   },
   speech: {
-    firstMinWords: n(4, 0, 15, 1, 'core', 'First clause min words', 'The first chunk of a reply may be cut at a comma/colon/dash once it has this many words, so speech starts before the first full sentence. 0 disables.', { unit: 'words', old: 6 }),
+    firstMinWords: n(4, 0, 15, 1, 'core', 'First clause min words', 'The first chunk of a reply may be cut at a comma/colon/dash once it has this many words, so speech starts before the first full sentence. 0 disables.', { unit: 'words', old: 6, superseded: [6] }),
     maxChars: n(220, 80, 600, 10, 'core', 'Max sentence chars', 'Run-on sentences are force-cut at the last comma or space past this length so a long sentence cannot stall first audio.', { unit: 'chars', old: 220 }),
     fillerAfterMs: n(1500, 300, 6000, 100, 'core', 'Continuation filler after', 'If a tool is still running and nothing has been spoken for this long, say one short filler ("Still looking.") so the agent never goes dead quiet.', { unit: 'ms', old: 1500 }),
     fillerMinGapMs: n(4000, 0, 20000, 500, 'core', 'Filler min gap', 'Skip the lead-in filler for a tool call if another filler was spoken more recently than this.', { unit: 'ms' }),
@@ -208,8 +214,19 @@ export function pickTuning<T extends TuningValues>(settings: T): TuningValues {
   return out as TuningValues
 }
 
-/** Merge an imported profile over the defaults, dropping unknown keys and clamping the rest. */
-export function sanitizeTuning(raw: unknown): TuningValues {
+export interface TuningMigration {
+  group: TuningGroup
+  key: string
+  from: number | boolean | string
+  to: number | boolean | string
+}
+
+/**
+ * Merge an imported or stored profile over the defaults, dropping unknown keys and clamping the rest.
+ * A stored value that equals a `superseded` default is replaced by the current default and reported
+ * through `onMigrate`, so a default changed in a newer build reaches settings files written by an older one.
+ */
+export function sanitizeTuning(raw: unknown, onMigrate?: (m: TuningMigration) => void): TuningValues {
   const out = defaultTuning()
   if (!raw || typeof raw !== 'object') return out
   for (const g of TUNING_GROUPS) {
@@ -217,8 +234,33 @@ export function sanitizeTuning(raw: unknown): TuningValues {
     if (!group || typeof group !== 'object') continue
     for (const { key, param } of tuningParams(g)) {
       const v = (group as Record<string, unknown>)[key]
-      if (v !== undefined) (out[g] as Record<string, unknown>)[key] = coerceParam(param, v)
+      if (v === undefined) continue
+      const coerced = coerceParam(param, v)
+      if (param.superseded?.includes(coerced) && coerced !== param.default) {
+        onMigrate?.({ group: g, key, from: coerced, to: param.default })
+        continue
+      }
+      ;(out[g] as Record<string, unknown>)[key] = coerced
     }
   }
   return out
+}
+
+/**
+ * The tuning groups of `settings` with every value that equals its default removed: what gets written
+ * to disk, so a stored file only pins what the user actually changed and new defaults propagate.
+ */
+export function stripTuningDefaults<T extends TuningValues>(settings: T): T {
+  const out = { ...settings } as Record<string, unknown>
+  for (const g of TUNING_GROUPS) {
+    const group = settings[g] as Record<string, unknown> | undefined
+    if (!group) continue
+    const kept: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(group)) {
+      const param = (TUNING[g] as Record<string, TuningParam | undefined>)[k]
+      if (!param || v !== param.default) kept[k] = v
+    }
+    out[g] = kept
+  }
+  return out as T
 }

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_TUNING, TUNING, TUNING_GROUPS, coerceParam, earConfig, sanitizeTuning, tuningDiff, tuningParams } from './tuning'
+import { DEFAULT_TUNING, TUNING, TUNING_GROUPS, coerceParam, earConfig, sanitizeTuning, stripTuningDefaults, tuningDiff, tuningParams } from './tuning'
 
 const allParams = TUNING_GROUPS.flatMap((g) => tuningParams(g).map((p) => ({ group: g, ...p })))
 
@@ -41,6 +41,20 @@ describe('tuning schema', () => {
     expect(t.brain.groqReasoningEffort).toBe('low')
     expect(t.speech).toEqual(DEFAULT_TUNING.speech)
     expect(coerceParam(TUNING.runtime.logTranscripts, 'yes')).toBe(true)
+  })
+
+  it('replaces superseded defaults and reports them; stripTuningDefaults keeps only changed values', () => {
+    const migrated: string[] = []
+    const t = sanitizeTuning({ endpoint: { maxSilenceMs: 1200, vadThreshold: 0.6 }, speech: { firstMinWords: 6 } }, (m) => migrated.push(`${m.group}.${m.key}:${m.from}->${m.to}`))
+    expect(t.endpoint.maxSilenceMs).toBe(TUNING.endpoint.maxSilenceMs.default)
+    expect(t.speech.firstMinWords).toBe(TUNING.speech.firstMinWords.default)
+    expect(t.endpoint.vadThreshold).toBe(0.6)
+    expect(migrated).toEqual(['endpoint.maxSilenceMs:1200->1500', 'speech.firstMinWords:6->4'])
+    // every superseded value must differ from the current default, or it would never migrate
+    for (const g of TUNING_GROUPS) for (const { param } of tuningParams(g)) for (const v of param.superseded ?? []) expect(v).not.toBe(param.default)
+    const stripped = stripTuningDefaults({ ...DEFAULT_TUNING, endpoint: { ...DEFAULT_TUNING.endpoint, vadThreshold: 0.6 } })
+    expect(stripped.endpoint).toEqual({ vadThreshold: 0.6 })
+    expect(stripped.brain).toEqual({})
   })
 
   it('tuningDiff lists only values that differ from the defaults', () => {

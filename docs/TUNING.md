@@ -18,6 +18,13 @@ Export a profile from Settings → Tuning to get a JSON file with the current va
 defaults and (after Phase 3) the last session's p50/p95 latencies. Import merges a profile over the
 defaults, clamping every value to its range and dropping unknown keys.
 
+**Changing a default.** `settings.json` only stores tuning values that differ from the defaults
+(`stripTuningDefaults`), so a new default reaches everyone who never touched that knob. Files written
+by older builds pinned every value; for those, each parameter lists its earlier defaults in
+`superseded` and a stored value equal to one of them is replaced at load (`app.log`:
+`settings: migrated defaults …`, and `settings.migrated` in the trace). When you change a `default`
+in `tuning.ts`, add the old value to `superseded` in the same edit.
+
 ## How a voice turn is timed
 
 ```

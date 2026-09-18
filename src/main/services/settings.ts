@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { safeStorage } from 'electron'
 import type { KeyStatus, PromptStyle, Provider, Settings, Skill } from '@shared/types'
-import { defaultTuning } from '@shared/tuning'
+import { defaultTuning, sanitizeTuning, stripTuningDefaults, type TuningMigration } from '@shared/tuning'
 import { DEFAULT_FALLBACK_MODEL_ID, DEFAULT_MODEL_ID } from '@core/providers/models'
 import { DEFAULT_STYLE_ID } from '@core/prompts/styles'
 import { mergeSkills } from '@core/prompts/skills'
@@ -73,6 +73,8 @@ export class SettingsService implements KeySource {
   private readonly skillsPath: string
   private env: Record<string, string>
   private listeners = new Set<(s: Settings) => void>()
+  /** Superseded tuning defaults replaced at load (empty after the first save rewrites the file). */
+  readonly migrations: TuningMigration[]
 
   constructor(
     private readonly userData: string,
@@ -84,7 +86,12 @@ export class SettingsService implements KeySource {
     this.stylesPath = join(userData, 'styles.json')
     this.skillsPath = join(userData, 'skills.json')
     this.env = { ...parseDotEnv(dotEnvPath), ...process.env } as Record<string, string>
-    this.settings = deepMerge(DEFAULT_SETTINGS, this.readJson<Partial<Settings>>(this.settingsPath, {}))
+    const stored = this.readJson<Partial<Settings>>(this.settingsPath, {})
+    // tuning groups: unknown keys dropped, values clamped, superseded defaults replaced by current ones
+    const migrated: TuningMigration[] = []
+    const tuning = sanitizeTuning(stored, (m) => migrated.push(m))
+    this.settings = deepMerge(DEFAULT_SETTINGS, { ...stored, ...tuning })
+    this.migrations = migrated
     this.customStyles = this.readJson<PromptStyle[]>(this.stylesPath, [])
     this.storedSkills = this.readJson<Skill[]>(this.skillsPath, [])
     this.loadKeys()
@@ -106,9 +113,14 @@ export class SettingsService implements KeySource {
 
   set(patch: Partial<Settings>): Settings {
     this.settings = deepMerge(this.settings, patch)
-    writeFileSync(this.settingsPath, JSON.stringify(this.settings, null, 2))
+    this.persist()
     for (const fn of this.listeners) fn(this.settings)
     return this.settings
+  }
+
+  /** Tuning values equal to their default are not written, so a future default change reaches this file. */
+  private persist(): void {
+    writeFileSync(this.settingsPath, JSON.stringify(stripTuningDefaults(this.settings), null, 2))
   }
 
   onChange(fn: (s: Settings) => void): () => void {
