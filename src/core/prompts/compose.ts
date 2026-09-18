@@ -55,7 +55,7 @@ const CONTEXT = `Context (injected by the app, always current)
 
 const MEMORY = `What you remember about {user_name}
 {memory}
-Treat these as facts unless the conversation contradicts them. Use the remember tool to save new stable preferences, facts or decisions the user states; never store guesses.`
+Treat these as facts unless the conversation contradicts them; they are also your best guide to what a mangled transcript was meant to say. Use the remember tool to save new stable preferences, facts or decisions the user states; never store guesses.`
 
 export function composeSystemPrompt(style: PromptStyle, ctx: PromptContext): string {
   const fill = (s: string): string =>

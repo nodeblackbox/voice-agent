@@ -37,9 +37,13 @@ export class SidecarService {
   private speaking = false
   private thinking = false
   private restartTimer: NodeJS.Timeout | null = null
+  private idleTimer: NodeJS.Timeout | null = null
   status: ServiceStatus = { name: 'sidecar', state: 'off' }
 
-  constructor(private readonly opts: SidecarOptions) {}
+  constructor(
+    private readonly opts: SidecarOptions,
+    private readonly idleShutdownMs = 5 * 60_000
+  ) {}
 
   private setStatus(state: ServiceStatus['state'], detail?: string): void {
     this.status = { name: 'sidecar', state, detail }
@@ -163,7 +167,31 @@ export class SidecarService {
     else if (this.listening) log('sidecar', `listening off after ${this.frames} frames`)
     this.listening = on
     this.send({ type: 'mute', on: !on })
-    if (on && !this.proc) this.start()
+    if (this.idleTimer) clearTimeout(this.idleTimer)
+    this.idleTimer = null
+    if (on) {
+      if (!this.proc) this.start()
+      return
+    }
+    // the models hold several GB; give them back if the microphone stays closed
+    if (this.proc && this.idleShutdownMs > 0) {
+      this.idleTimer = setTimeout(() => {
+        if (this.listening) return
+        log('sidecar', `idle for ${Math.round(this.idleShutdownMs / 60000)} min, releasing the models`)
+        this.shutdownIdle()
+      }, this.idleShutdownMs)
+    }
+  }
+
+  private shutdownIdle(): void {
+    const p = this.proc
+    if (!p) return
+    this.proc = null
+    p.removeAllListeners('exit')
+    this.ws?.terminate()
+    this.ws = null
+    p.kill()
+    this.setStatus('off', 'idle; starts again when you press Voice')
   }
 
   agentSpeaking(on: boolean): void {
@@ -203,6 +231,7 @@ export class SidecarService {
   stop(): void {
     this.stopping = true
     if (this.restartTimer) clearTimeout(this.restartTimer)
+    if (this.idleTimer) clearTimeout(this.idleTimer)
     this.ws?.terminate()
     this.ws = null
     this.proc?.kill()

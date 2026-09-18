@@ -19,7 +19,7 @@ export function memoryTools(deps: MemoryToolDeps): ToolSet {
   return {
     remember: tool({
       description:
-        'Save something stable about the user for future sessions: a preference, a fact about them, a decision they made, or a todo. Use kind "profile" for things that should always be in context (home location, preferred gym, name of their dog). Never store guesses or one-off details.',
+        'Save something stable about the user for future sessions: a preference, a fact about them, a decision they made, or a todo. Use kind "profile" for things that should always be in context (home location, preferred gym, the stack they work in). Never store guesses or one-off details. Write the corrected, canonical wording, not the raw transcript: speech recognition mangles names and technical terms, so if a word is clearly a mis-hearing of something you know ("edge TTS" heard as "HTTS", "Parakeet" as "parakeets"), save the correct form. If you cannot tell what a mangled term was meant to be, ask before saving rather than storing nonsense. Saving with an existing key overwrites it, which is how you correct a wrong entry.',
       inputSchema: z.object({
         key: z.string().describe('Short label, e.g. "Preferred gym"'),
         value: z.string().describe('The fact itself, one sentence'),

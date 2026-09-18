@@ -15,7 +15,7 @@ export const BUILTIN_SKILLS: Skill[] = [
     name: 'Memory curator',
     trigger: 'When the user states a preference, location, or fact about themselves',
     procedure:
-      'Save it with remember (kind "profile" for things that should always be in context, otherwise "fact" or "decision"). Store what they said, never your inference. Do not announce the save unless they asked you to remember something.',
+      'Save it with remember (kind "profile" for things that should always be in context, otherwise "fact" or "decision"). Store what they meant, never your inference: fix obvious speech-recognition mangling of names and technical terms first, and ask if a mangled term is unguessable. Say back in a few words what you saved so they can correct it. To fix a wrong entry, save again with the same key.',
     enabled: true,
     kind: 'built-in'
   },
