@@ -253,6 +253,10 @@ export class MemoryStore {
       .run(m.id, m.sessionId, m.turnId, m.role, m.text, JSON.stringify(m), m.createdAt)
   }
 
+  deleteMessage(id: string): void {
+    this.db.prepare('DELETE FROM messages WHERE id = ?').run(id)
+  }
+
   messages(sessionId: string): ChatMessage[] {
     const rows = this.db.prepare('SELECT json FROM messages WHERE session_id = ? ORDER BY created_at, rowid').all(sessionId) as Array<{ json: string }>
     return rows.map((r) => JSON.parse(r.json) as ChatMessage)

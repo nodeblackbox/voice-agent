@@ -33,6 +33,7 @@ def test_full_utterance_emits_start_partial_end_final(make_pipeline, events):
     assert "speech_end" in kinds(events)
     end = next(e for e in events if e["type"] == "speech_end")
     assert end["reason"] == "done" and end["turnP"] == 0.95 and 250 <= end["silenceMs"] <= 300
+    assert end["capMs"] is None and end["segments"] == 0
     assert p.pending_decodes() == 1
     assert p.decode_next()
     final = next(e for e in events if e["type"] == "final")
@@ -44,8 +45,8 @@ def test_full_utterance_emits_start_partial_end_final(make_pipeline, events):
 
 
 def test_partials_are_emitted_on_the_timer(make_pipeline, events):
-    n = 60  # 1.92 s
-    p = make_pipeline(vad=FakeVad([0.9] * n, default=0.0), asr=FakeAsr("partial text"))
+    n = 60  # 1.92 s of continuous speech: no pause, so only the cadence fires
+    p = make_pipeline(vad=FakeVad([0.9] * n, default=0.9), asr=FakeAsr("partial text"))
     speak(p, n)
     partials = [e for e in events if e["type"] == "partial"]
     # one partial per `partial_every_ms` of utterance audio (600 ms default over ~1.9 s => three)
@@ -74,20 +75,65 @@ def test_too_short_speech_is_a_silent_blip(make_pipeline, events):
     assert vad.resets >= 1
 
 
-def test_timeout_when_model_never_says_done(make_pipeline, events):
-    p = make_pipeline(vad=FakeVad([0.9] * 20, default=0.0), turn=FakeTurn(0.1))
-    speak(p, 20 + 40)  # 1.28 s of silence > max_silence 1200 ms
+def test_timeout_when_model_is_unsure_uses_the_normal_cap(make_pipeline, events):
+    p = make_pipeline(vad=FakeVad([0.9] * 20, default=0.0), turn=FakeTurn(0.5))
+    speak(p, 20 + 50)  # 1.6 s of silence > max_silence 1500 ms
     end = next(e for e in events if e["type"] == "speech_end")
     assert end["reason"] == "timeout"
-    assert end["silenceMs"] >= 1200
+    assert 1500 <= end["silenceMs"] < 1600
+    assert end["capMs"] == 1500
+
+
+def test_timeout_waits_for_the_low_cap_when_the_model_says_not_done(make_pipeline, events):
+    p = make_pipeline(vad=FakeVad([0.9] * 20, default=0.0), turn=FakeTurn(0.05))
+    speak(p, 20 + 60)  # 1.9 s of silence: past the normal cap, under the low cap
+    assert "speech_end" not in kinds(events)
+    speak(p, 40)  # ~3.2 s of silence in total
+    end = next(e for e in events if e["type"] == "speech_end")
+    assert end["reason"] == "timeout" and end["capMs"] == 3000 and end["silenceMs"] >= 3000
 
 
 def test_max_utterance_cuts_a_monologue(make_pipeline, events):
-    cfg = EndpointConfig(max_utterance_ms=1000)
+    cfg = EndpointConfig(max_utterance_ms=1000, segment_every_ms=100000)
     p = make_pipeline(vad=FakeVad(default=0.9), endpoint=cfg)
     speak(p, 40)  # 1.28 s of continuous speech
     end = next(e for e in events if e["type"] == "speech_end")
-    assert end["reason"] == "timeout"
+    assert end["reason"] == "timeout" and end["capMs"] == 1000
+
+
+def test_long_utterance_is_segmented_while_it_stays_open(make_pipeline, events):
+    cfg = EndpointConfig(segment_every_ms=1000, max_utterance_ms=100000)
+    # speech with a quiet frame every 10th frame so there is a clean cut point
+    scores = [0.2 if i % 10 == 9 else 0.9 for i in range(80)]
+    p = make_pipeline(vad=FakeVad(scores, default=0.0), endpoint=cfg, asr=FakeAsr("part"))
+    speak(p, 80)  # 2.56 s of speech -> two segments handed off, utterance still open
+    assert p._state == "user_speaking"
+    assert p._segments == 2
+    assert p.pending_decodes() == 2
+    assert p.decode_next() and p.decode_next()
+    segs = [e for e in events if e["type"] == "segment"]
+    assert [s["index"] for s in segs] == [0, 1]
+    assert all(s["text"] == "part" for s in segs)
+    # the tail is short: the utterance buffer restarted at the cut point
+    assert len(p._utt) * FRAME_MS < 1000
+    speak(p, 50)  # silence -> the tail ends the turn
+    end = next(e for e in events if e["type"] == "speech_end")
+    assert end["segments"] == 2
+    p.decode_next()
+    final = next(e for e in events if e["type"] == "final")
+    assert final["segments"] == 2 and final["durationMs"] < 2000
+
+
+def test_pause_triggers_an_immediate_partial_for_the_filler_guard(make_pipeline, events):
+    asr = FakeAsr("and then I'll")
+    p = make_pipeline(vad=FakeVad([0.9] * 12, default=0.0), asr=asr)
+    speak(p, 12)  # 384 ms of speech: past minSpeech, well under the 600 ms partial cadence
+    partials_before = len([e for e in events if e["type"] == "partial"])
+    speak(p, 4)  # 128 ms of silence >= silencePartialMs
+    assert len([e for e in events if e["type"] == "partial"]) == partials_before + 1
+    # only one forced partial per pause
+    speak(p, 3)
+    assert len([e for e in events if e["type"] == "partial"]) == partials_before + 1
 
 
 def test_barge_in_ducks_then_cuts_and_opens_an_utterance(make_pipeline, events):

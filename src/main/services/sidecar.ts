@@ -12,6 +12,7 @@ export interface TurnCheck {
   p: number
   heldOnFiller: boolean
   lastWord: string
+  capMs?: number
 }
 
 export type SidecarEvent =
@@ -20,8 +21,9 @@ export type SidecarEvent =
   | { type: 'level'; p: number }
   | { type: 'speech_start'; t: number }
   | { type: 'partial'; text: string }
-  | { type: 'speech_end'; reason: 'done' | 'timeout'; silenceMs: number; turnP: number | null; speechMs?: number; checks?: TurnCheck[]; afterCut?: boolean }
-  | { type: 'final'; text: string; durationMs: number; asrMs: number; asrRtf?: number | null; turnP: number | null; reason: string; queuedMs?: number; afterCut?: boolean }
+  | { type: 'speech_end'; reason: 'done' | 'timeout'; silenceMs: number; turnP: number | null; speechMs?: number; checks?: TurnCheck[]; afterCut?: boolean; capMs?: number | null; segments?: number }
+  | { type: 'segment'; text: string; index: number; durationMs: number; asrMs: number }
+  | { type: 'final'; text: string; durationMs: number; asrMs: number; asrRtf?: number | null; turnP: number | null; reason: string; queuedMs?: number; afterCut?: boolean; segments?: number }
   | { type: 'bargein'; stage: 'duck' | 'cut' | 'release'; prerollMs?: number }
   | { type: 'stats'; turns?: number; turnChecks?: number; turnCostP50Ms?: number | null; heldOnFiller?: number; backchannels?: number; cuts?: number; cutsEmptyFinal?: number }
   | { type: 'error'; message: string; fatal: boolean }

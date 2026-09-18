@@ -153,6 +153,9 @@ export const useStore = create<Store>((set, get) => ({
           }
           break
         }
+        case 'message-removed':
+          set({ messages: get().messages.filter((m) => m.id !== e.id) })
+          break
         case 'partial':
           set({ partial: e.text })
           break

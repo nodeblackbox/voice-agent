@@ -164,6 +164,24 @@ export interface McpServerConfig {
   url?: string
 }
 
+/** How the ears closed a user's turn; drawn as chips on the user bubble. */
+export interface UserTiming {
+  speechMs?: number
+  silenceMs?: number
+  endReason?: 'done' | 'timeout'
+  turnP?: number | null
+  /** Which silence/utterance cap fired on a timeout. */
+  capMs?: number | null
+  /** This turn was assembled from a fragment plus what the user said next. */
+  merged?: boolean
+  parts?: number
+  /** Long-utterance segments transcribed before the final tail. */
+  segments?: number
+  /** This utterance interrupted the agent (barge-in cut). */
+  cutAgent?: boolean
+  speechEndAt?: number
+}
+
 export interface ChatMessage {
   id: string
   turnId: string
@@ -171,6 +189,7 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'tool'
   text: string
   via?: 'voice' | 'text'
+  timing?: UserTiming
   streaming?: boolean
   interrupted?: boolean
   /** What the user actually heard before an interruption. */
@@ -353,6 +372,7 @@ export type AgentEvent =
   | { type: 'state'; state: AgentState }
   | { type: 'service'; status: ServiceStatus }
   | { type: 'message'; message: ChatMessage }
+  | { type: 'message-removed'; id: string }
   | { type: 'partial'; text: string }
   | { type: 'level'; p: number }
   | { type: 'metrics'; turnId: string; metrics: TurnMetrics }

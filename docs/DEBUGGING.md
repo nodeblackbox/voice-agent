@@ -26,8 +26,8 @@ Every line has `t` (ISO time), `sid` (session), usually `turn`, and `ev`. Prefix
 | prefix | source | events |
 |---|---|---|
 | `state` | agent state machine | `{from, to, event}` — every transition (`idle`, `listening`, `user_speaking`, `thinking`, `tool`, `speaking`, `interrupted`) |
-| `ear.*` | sidecar events (never `level`) | `speech_start{earT}`, `partial{text}`, `speech_end{reason, silenceMs, turnP, speechMs, checks[], afterCut}`, `final{text, durationMs, asrMs, asrRtf, queuedMs, afterCut}`, `bargein{stage: duck|cut|release, prerollMs}`, `status{stage}`, `ready{loadS}`, `stats{turns, turnChecks, turnCostP50Ms, heldOnFiller, backchannels, cuts, cutsEmptyFinal}`, `error` |
-| `turn.*` | agent core | `start{via, text, asrMs, queuedMs, endReason, silenceMs, turnP, model, style, mode, tools, memoryHints…}`, `first_token{ttftMs}`, `first_sentence{ttfsMs}`, `first_audio{ttfaMs, speechEndToAudioMs, ttsFirstMs, ttsFirstByteMs}`, `tool_start{id, name, summary}`, `tool_end{id, name, ok, ms, detail}`, `filler{kind: lead-in|continuation, text}`, `attempt{reason, model}`, `attempt_failed{error, transient}`, `stall{reason}`, `step_limit`, `notice{text}`, `self_cut_suspect{overlap}`, `dropped{reason}`, `spoken_split{seq, offsetS, durationS}`, `cancel{reason, spokenText, unspokenText, metrics}`, `drain_timeout{waitMs}` (the renderer never reported the audio finished, e.g. audio device error), `end{metrics, fillers, ttsDroppedFrames}`, `error{message}` |
+| `ear.*` | sidecar events (never `level`) | `speech_start{earT}`, `partial{text}`, `speech_end{reason, silenceMs, turnP, speechMs, checks[{silenceMs,p,heldOnFiller,lastWord,capMs}], afterCut, capMs, segments}`, `segment{text, index}` (older part of a long utterance, turn still open), `final{text, durationMs, asrMs, asrRtf, queuedMs, afterCut, segments}`, `bargein{stage: duck|cut|release, prerollMs}`, `status{stage}`, `ready{loadS}`, `stats{turns, turnChecks, turnCostP50Ms, heldOnFiller, backchannels, cuts, cutsEmptyFinal}`, `error` |
+| `turn.*` | agent core | `start{via, text, asrMs, queuedMs, endReason, silenceMs, turnP, model, style, mode, tools, memoryHints…}`, `first_token{ttftMs}`, `first_sentence{ttfsMs}`, `first_audio{ttfaMs, speechEndToAudioMs, ttsFirstMs, ttsFirstByteMs}`, `tool_start{id, name, summary}`, `tool_end{id, name, ok, ms, detail}`, `filler{kind: lead-in|continuation, text}`, `attempt{reason, model}`, `attempt_failed{error, transient}`, `stall{reason}`, `step_limit`, `notice{text}`, `self_cut_suspect{overlap}`, `dropped{reason}`, `spoken_split{seq, offsetS, durationS}`, `cancel{reason, spokenText, unspokenText, metrics}`, `drain_timeout{waitMs}` (the renderer never reported the audio finished, e.g. audio device error), `end{metrics, fillers, ttsDroppedFrames}`, `error{message}`, `mergeable{reason}` (this transcript looked unfinished; a resume inside the window merges), `continuation{gapMs}` (the user resumed: reply cancelled silently), `merged{parts, text}` (the joined transcript starts a turn), `segment{index}` |
 | `tts.sentence` | speaker | `{seq, kind, chars, ms, firstByteMs, attempts, outcome: ok|skip|fallback, engine}` |
 | `playback.*` | renderer via agent | `started{seq, kind}`, `finished{seq}`, `drained{chunks}` |
 | `sidecar.*` | process supervisor | `spawn`, `connected{port, retries}`, `buffer_flushed{frames, ms}`, `ws_close{code, processAlive}`, `heartbeat_lost`, `restart{delayMs}`, `idle_shutdown`, `exit{code}` |
@@ -74,6 +74,12 @@ a knob in `docs/TUNING.md`.
 - `ear.final` with empty `text` → `turn.dropped reason=empty-transcript`; the ASR heard nothing usable.
 - `turn.start` but no `turn.first_token` → the model: look for `turn.attempt_failed`, `turn.stall`
   or `turn.error`. `attempt{reason: fallback}` means the primary was down.
+
+**"It cut me off while I was thinking."** On the `ear.speech_end`: `reason=timeout` and `capMs`
+tells you which cap fired (1500 = the model was unsure, 3000 = it said "not done" but you paused longer
+than `maxSilenceLowMs`). Then look for `turn.mergeable` → `turn.continuation` → `turn.merged` on the
+next turn: if they are there, the app joined your fragment with what you said next and only the merged
+text got a reply.
 
 **"It cut me off."** On the `ear.speech_end` that ended the turn, read `checks[]`:
 - last `p` between `turnThreshold` and `turnHighThreshold` with `heldOnFiller=false` → the tiers

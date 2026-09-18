@@ -89,10 +89,14 @@ class Pipeline:
         self._state = LISTENING
         self._preroll: collections.deque[np.ndarray] = collections.deque(maxlen=1)
         self._utt: list[np.ndarray] = []
+        self._utt_p: list[float] = []      # VAD probability per frame of _utt, for segment cut points
         self._t_on = 0.0
         self._t_last = 0.0
+        self._t_segment = 0.0             # audio clock when the current segment started
+        self._segments = 0                # segments already sent for the open utterance
         self._announced = False
         self._after_cut = False
+        self._silence_partial_done = False
         self._last_partial_len = 0
         self._bucket = BargeInBucket(self.cfg)
         self._faults = RateLimiter(window_s=10.0, burst=3)
@@ -224,6 +228,8 @@ class Pipeline:
         self._pending = np.zeros(0, dtype=np.float32)
         self._state = LISTENING
         self._utt = []
+        self._utt_p = []
+        self._segments = 0
         self._preroll.clear()
         self._bucket.reset()
         self._announced = False
@@ -265,20 +271,28 @@ class Pipeline:
 
         # USER_SPEAKING
         self._utt.append(chunk)
+        self._utt_p.append(p)
         if p >= cfg.vad_threshold:
             self._t_last = now
+            self._silence_partial_done = False
         if not self._announced and (self._t_last - self._t_on) * 1e3 >= cfg.min_speech_ms:
             self._announced = True
             self.emit({"type": "speech_start", "t": self._clock()})
 
+        sil_ms = (now - self._t_last) * 1e3
         total = len(self._utt) * CHUNK
-        if (self._announced and total - self._last_partial_len >= int(cfg.partial_every_ms / 1000 * SR)
-                and not self._partial_busy.is_set()):
+        due = total - self._last_partial_len >= int(cfg.partial_every_ms / 1000 * SR)
+        # a pause just began: decode now so the filler-word guard reads the real last word
+        pause = not self._silence_partial_done and sil_ms >= cfg.silence_partial_ms and self._last_partial_len < total
+        if self._announced and (due or pause) and not self._partial_busy.is_set():
             self._last_partial_len = total
+            self._silence_partial_done = True
             self._partial_busy.set()
             self._spawn(self._partial_job, (np.concatenate(self._utt),))
 
-        sil_ms = (now - self._t_last) * 1e3
+        if self._announced and (now - self._t_segment) * 1e3 >= cfg.segment_every_ms:
+            self._emit_segment(now)
+
         decision = self.ep.update(lambda: np.concatenate(self._utt), sil_ms, self._last_partial_text)
         if decision is None and (now - self._t_on) * 1e3 >= cfg.max_utterance_ms:
             decision = "timeout"
@@ -289,22 +303,57 @@ class Pipeline:
         if self._announced:
             turn_p = self.ep.last_p
             speech_ms = (self._t_last - self._t_on) * 1e3
+            cap_ms = self.ep.cap_ms if decision == "timeout" and (now - self._t_on) * 1e3 < cfg.max_utterance_ms else \
+                (cfg.max_utterance_ms if decision == "timeout" else None)
             self.emit({"type": "speech_end", "reason": decision, "silenceMs": round(sil_ms),
                        "turnP": None if turn_p is None else round(turn_p, 3), "speechMs": round(speech_ms),
-                       "checks": list(self.ep.trace), "afterCut": self._after_cut})
-            log.info("turn_end reason=%s silence_ms=%.0f turn_p=%s speech_ms=%.0f checks=%d after_cut=%s", decision, sil_ms,
-                     f"{turn_p:.2f}" if turn_p is not None else "n/a", speech_ms, len(self.ep.trace), self._after_cut)
-            self._decode_q.put((audio, decision, turn_p, self._clock(), self._after_cut))
+                       "checks": list(self.ep.trace), "afterCut": self._after_cut, "capMs": cap_ms,
+                       "segments": self._segments})
+            log.info("turn_end reason=%s silence_ms=%.0f turn_p=%s speech_ms=%.0f checks=%d after_cut=%s cap_ms=%s segments=%d",
+                     decision, sil_ms, f"{turn_p:.2f}" if turn_p is not None else "n/a", speech_ms, len(self.ep.trace),
+                     self._after_cut, cap_ms, self._segments)
+            self._decode_q.put({"kind": "final", "audio": audio, "reason": decision, "turn_p": turn_p,
+                                "t_end": self._clock(), "after_cut": self._after_cut, "segments": self._segments})
         self._close_utterance()
+
+    def _emit_segment(self, now: float) -> None:
+        """Hand the older part of a long utterance to the decoder while the user keeps talking.
+
+        Cuts at the most recent quiet frame (looking back up to 2 s) so a word is not split; the tail
+        stays the live utterance, so partial captions and end-of-turn scoring continue on it."""
+        cfg = self.cfg
+        n = len(self._utt)
+        lookback = min(n - 1, int(2.0 * SR / CHUNK))
+        cut = n
+        for i in range(n - 1, max(0, n - 1 - lookback), -1):
+            if self._utt_p[i] < cfg.vad_threshold:
+                cut = i + 1
+                break
+        if cut <= 0:
+            cut = n
+        head = self._utt[:cut]
+        self._utt = self._utt[cut:]
+        self._utt_p = self._utt_p[cut:]
+        self._segments += 1
+        self._t_segment = now
+        self._last_partial_len = len(self._utt) * CHUNK
+        self._silence_partial_done = False
+        audio = np.concatenate(head) if head else np.zeros(0, dtype=np.float32)
+        self._decode_q.put({"kind": "segment", "audio": audio, "index": self._segments - 1, "t_end": self._clock()})
+        log.info("segment %d: %.1f s handed to the decoder, %.1f s stays open", self._segments - 1, len(audio) / SR,
+                 len(self._utt) * CHUNK / SR)
 
     def _open_utterance(self, now: float, announce: bool = False) -> None:
         assert self.ep is not None
         self._state = USER_SPEAKING
         self.ep.start_utterance()
-        self._t_on = self._t_last = now
+        self._t_on = self._t_last = self._t_segment = now
         self._utt = list(self._preroll)
+        self._utt_p = [0.0] * len(self._utt)
+        self._segments = 0
         self._last_partial_len = 0
         self._last_partial_text = ""
+        self._silence_partial_done = False
         self._bucket.reset()
         self._announced = announce
         self._after_cut = announce
@@ -325,6 +374,8 @@ class Pipeline:
         assert self.vad is not None
         self._state = LISTENING
         self._utt = []
+        self._utt_p = []
+        self._segments = 0
         self._preroll.clear()
         self.vad.reset()
         self._bucket.reset()
@@ -369,24 +420,34 @@ class Pipeline:
             self.decode_one(item)
         return True
 
-    def decode_one(self, item: tuple) -> None:
-        audio, reason, turn_p, t_end, after_cut = item
+    def decode_one(self, item: dict[str, Any]) -> None:
         assert self.asr is not None
+        audio: np.ndarray = item["audio"]
         t0 = self._clock()
-        try:
-            with self._asr_lock:
-                text = self.asr.recognize(audio)
-        except Exception as exc:  # noqa: BLE001
-            self._fault("final decode failed", exc)
-            text = ""
+        text = ""
+        if len(audio):
+            try:
+                with self._asr_lock:
+                    text = self.asr.recognize(audio)
+            except Exception as exc:  # noqa: BLE001
+                self._fault(f"{item['kind']} decode failed", exc)
         asr_ms = (self._clock() - t0) * 1e3
         duration_ms = len(audio) / SR * 1e3
+        if item["kind"] == "segment":
+            self.emit({"type": "segment", "text": text, "index": item["index"], "durationMs": round(duration_ms),
+                       "asrMs": round(asr_ms)})
+            log.info("segment %d asr_ms=%.0f audio_s=%.1f: %s", item["index"], asr_ms, len(audio) / SR, text or "<empty>")
+            return
+        after_cut = item["after_cut"]
+        turn_p = item["turn_p"]
         self._turns += 1
         if after_cut and not text.strip():
             self._cuts_empty_final += 1
         self.emit({"type": "final", "text": text, "durationMs": round(duration_ms),
                    "asrMs": round(asr_ms), "asrRtf": round(asr_ms / duration_ms, 3) if duration_ms else None,
                    "turnP": None if turn_p is None else round(turn_p, 3),
-                   "reason": reason, "queuedMs": round((t0 - t_end) * 1e3), "afterCut": after_cut})
-        log.info("final asr_ms=%.0f audio_s=%.1f after_cut=%s: %s", asr_ms, len(audio) / SR, after_cut, text or "<empty>")
+                   "reason": item["reason"], "queuedMs": round((t0 - item["t_end"]) * 1e3), "afterCut": after_cut,
+                   "segments": item["segments"]})
+        log.info("final asr_ms=%.0f audio_s=%.1f after_cut=%s segments=%d: %s", asr_ms, len(audio) / SR, after_cut,
+                 item["segments"], text or "<empty>")
         self._emit_stats()

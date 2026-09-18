@@ -55,7 +55,14 @@ describe('tuning schema', () => {
     for (const { group, key } of allParams) expect(doc, `${group}.${key} missing from docs/TUNING.md`).toContain(`\`${key}\``)
     const protocol = readFileSync(join(root, 'sidecar', 'PROTOCOL.md'), 'utf8')
     for (const [key, value] of Object.entries(earConfig(DEFAULT_TUNING))) {
-      expect(protocol, `PROTOCOL.md default for ${key}`).toContain(`\`${key}\` (${value})`)
+      if (typeof value === 'string') expect(protocol, `PROTOCOL.md entry for ${key}`).toContain(`\`${key}\``)
+      else expect(protocol, `PROTOCOL.md default for ${key}`).toContain(`\`${key}\` (${value})`)
     }
+  })
+
+  it('text params are clamped to their max length and default when not a string', () => {
+    expect(coerceParam(TUNING.endpoint.fillerWords, 42)).toBe(TUNING.endpoint.fillerWords.default)
+    expect(coerceParam(TUNING.endpoint.fillerWords, 'x'.repeat(5000))).toHaveLength(2000)
+    expect(earConfig(DEFAULT_TUNING).fillerWords).toContain('basically')
   })
 })

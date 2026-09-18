@@ -40,13 +40,19 @@ this document either shortens one of those stages or protects against cutting yo
 | `vadThreshold` | 0.5 | 0.5 | Silero probability that opens an utterance while listening. Lower catches quiet speech; too low and breaths/keyboard clicks start false turns (they are usually rejected as blips, but each one resets the VAD state). |
 | `minSpeechMs` | 250 | 250 | Speech needed before an utterance counts. Under this it is a blip and never reaches ASR. Raise if coughs become turns; lower if very short answers ("yes") get dropped. |
 | `minSilenceMs` | 250 | 250 | Silence before Smart Turn starts scoring. This is the *floor* of end-of-turn latency. Below ~200 the model scores mid-breath and cuts more. |
-| `maxSilenceMs` | 1200 | 1200 | Hard end of turn regardless of the model. The safety net against a mis-scoring model. If turns often end with reason `timeout`, the model is not confident on your speech: look at `speech_end.checks[].p` in the trace before raising this. |
+| `maxSilenceMs` | 1500 | 1200 | Hard end of turn while Smart Turn is *unsure* (score between `turnLowThreshold` and `turnThreshold`). If turns often end with reason `timeout` and `capMs` = this value, the model is on the fence about your endings: look at `speech_end.checks[].p` before raising it. |
+| `turnLowThreshold` | 0.3 | — | Below this score Smart Turn is *sure you are not done*, and the cap switches to `maxSilenceLowMs`. This is what lets you stop and think mid-sentence. |
+| `maxSilenceLowMs` | 3000 | — | How long a thinking pause may last while the model says "not done". In the stress-test session 55 of 60 timeouts happened with a last score under 0.5 — the user was thinking and the 1.2 s cap cut them. Raise if `capMs=3000` timeouts still show up in the trace while you are mid-thought; lower if the reply feels slow after you *really* stopped on a low score (rare: a real ending usually scores high). |
 | `checkEveryMs` | 200 | 200 | Minimum extra silence between checks. Each check is one ONNX pass on 8 s of audio (10-30 ms CPU). Lower = earlier cut, more CPU. |
 | `turnThreshold` | 0.7 | 0.7 | Below this the turn never ends. Raise if you get cut off mid-thought; lower if it waits for clear endings. |
-| `turnHighThreshold` | 0.9 | 0.9 | At/above this the turn ends even if the live partial ends on a filler word. Between the two, a trailing "um / so / and / but…" holds the turn open (the `FILLER_ENDINGS` list in `sidecar/ear/endpoint.py`). Live testing showed raw Smart Turn cutting mid-hedge at 0.56-0.66, which is why the tiers exist. |
+| `turnHighThreshold` | 0.9 | 0.9 | At/above this the turn ends even if the live partial ends on a filler word — except once per utterance when `fillerHoldsHighTier` is on. Between the two, a trailing filler word always holds the turn open. Live testing showed raw Smart Turn cutting mid-hedge at 0.56-0.66, which is why the tiers exist. |
+| `fillerWords` | (list) | 29 words | Comma-separated words that mean "not finished" when a pause lands right after them. The default now covers what people actually pause on: `then, basically, also, I'll, I'm, gonna, to, of, kind, sort, really, just…`. Add your own hedges. The core uses the same list to decide whether a transcript is a fragment (see `continuationWindowMs`). |
+| `fillerHoldsHighTier` | true | false | A trailing filler word holds the turn once even at a confident score; the next check (200 ms later) decides. Two-thirds of confident ends in the stress test closed at the *first* check, 256 ms after the last word — this gives a hedge one more beat. |
+| `silencePartialMs` | 100 | — | A pause this long forces one partial transcript so the guard reads your real last word; in the stress test 13 checks saw *no* caption at all and many saw one up to 600 ms old. Costs one extra decode per pause. |
 | `partialEveryMs` | 600 | 600 | New audio between live partial transcripts. Partials feed captions *and* the filler-word guard, so a slower cadence means the guard looks at staler words. |
 | `prerollMs` | 1000 | 1000 | Audio kept before speech is detected and prepended to the utterance. **Must exceed `bargeInChunks × 32 ms`**: after a barge-in cut the new utterance is seeded from this buffer, and the cut only fires once that much speech has already gone by. At 300 ms (the previous default) the first word after an interruption was lost. |
-| `maxUtteranceMs` | 30000 | 30000 | Cap on one utterance. |
+| `segmentEveryMs` | 30000 | — | While you keep talking, the older part of the utterance is transcribed every this often (`segment` events) and appears in your bubble; the turn stays open. 35 of the stress test's timeouts were 30 s monologues cut by the old cap. |
+| `maxUtteranceMs` | 120000 | 30000 | Absolute cap on one utterance; with segmentation this only stops a stuck microphone. |
 
 ## Ears: barge-in (`endpoint`)
 
@@ -84,6 +90,9 @@ ducked and bargeInReleaseChunks quiet frames → release: it was a backchannel, 
 | `temperature` | 0.6 | 0.6 | Sampling temperature. |
 | `maxTokens` | 1000 | 300 | Output cap per call. The old agent was voice-only and short; comprehensive styles need headroom. |
 | `groqReasoningEffort` | low | low | Reasoning budget for Groq reasoning models. Voice cannot wait for long thinking. |
+| `continuationWindowMs` | 2500 | — | A transcript that looks unfinished (ends on a filler word, fewer than `mergeMinWords`, a timeout on a low score, or dangling punctuation) is still answered, but if you start speaking again within this long the reply is cancelled silently and the two pieces become one turn ("and then I'll." + "finish it off."). In the stress test 36 turns were followed by a continuation within 4 s. 0 disables. Trace: `turn.mergeable`, `turn.continuation`, `turn.merged`. |
+| `mergeMinWords` | 4 | — | Transcripts shorter than this always count as unfinished ("Yeah, so basically"). |
+| `mergeHoldMs` | 0 | — | Wait this long before sending an unfinished-looking transcript to the model, so a continuation merges without a reply ever starting. Costs that much latency on real endings that look unfinished; 0 = reply immediately and cancel if you continue. |
 
 ## Speech (`speech`)
 
@@ -129,13 +138,20 @@ ducked and bargeInReleaseChunks quiet frames → release: it was a backchannel, 
 Read the session trace (`docs/DEBUGGING.md`) before changing anything; every symptom below has a
 field that confirms it.
 
-- **It cuts me off mid-thought.** `speech_end.reason == 'done'` with `checks[-1].p` between 0.7 and
-  0.9 and the last partial word not in the filler list → raise `turnThreshold` a notch (0.75) or add
-  the word to `FILLER_ENDINGS`. If `p ≥ 0.9` the model is confident: lengthen your pauses or raise
-  `turnHighThreshold`.
+- **It cuts me off while I think.** Look at the `speech_end` that ended the turn:
+  `reason=timeout, capMs=1500` → the model was unsure (score between low and done thresholds) and the
+  normal cap fired: lower `turnLowThreshold` is wrong here; raise `maxSilenceMs` a little or lower
+  `turnThreshold`. `reason=timeout, capMs=3000` → you paused longer than the thinking cap: raise
+  `maxSilenceLowMs`. `reason=timeout, capMs=120000` → the absolute cap; should never happen.
+  `reason=done` with `checks[-1].lastWord` a hedge that is not in `fillerWords` → add it. If the next
+  `turn.start` came within 2–3 s, `turn.merged` should have joined the pieces; if it did not, the
+  fragment did not look unfinished — raise `mergeMinWords` or add the trailing word to `fillerWords`.
+- **It cuts me off mid-sentence (no pause).** `speech_end.reason == 'done'` with `checks[-1].p` between
+  0.7 and 0.9 and `lastWord` not a filler → raise `turnThreshold` a notch (0.75). If `p ≥ 0.9` the model
+  is confident: raise `turnHighThreshold` or keep `fillerHoldsHighTier` on.
 - **It waits too long after I finish.** Reason is `timeout` most of the time → the model never
-  crossed `turnThreshold`; lower it to 0.6 before touching `maxSilenceMs`. If reason is `done` but
-  late, lower `checkEveryMs` or `minSilenceMs`.
+  crossed `turnThreshold`; lower it to 0.6 before touching the caps. If reason is `done` but late, lower
+  `checkEveryMs` or `minSilenceMs`. If it replies to a real ending only after `mergeHoldMs`, set that to 0.
 - **My "mhm" interrupts it.** `bargein` shows `cut` after a short burst → raise `bargeInChunks` (12)
   or `bargeInThreshold`. `release` events are the healthy outcome for a backchannel.
 - **I have to shout to interrupt it.** Raise nothing; lower `bargeInThreshold` (0.65) and check

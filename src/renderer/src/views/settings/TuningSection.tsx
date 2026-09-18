@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ChevronDown, ChevronRight, Download, RotateCcw, SlidersHorizontal, Upload } from 'lucide-react'
 import type { Settings } from '@shared/types'
 import {
@@ -19,15 +19,42 @@ import { Btn, Card, Select, Tag, Toggle } from '../../components/primitives'
 type Value = number | boolean | string
 
 function formatValue(p: TuningParam, v: Value): string {
+  if (p.kind === 'text') return String(v).length > 40 ? `${String(v).slice(0, 39)}…` : String(v)
   if (p.kind !== 'number') return String(v)
   const n = Number(v)
   if (p.unit === 'ms' && n >= 10000) return `${(n / 1000).toFixed(n % 1000 ? 1 : 0)}s`
   return `${Number.isInteger(p.step) ? n : n.toFixed(2).replace(/\.?0+$/, '')}${p.unit && p.unit !== 'x' && p.unit !== 'p' ? ` ${p.unit}` : ''}`
 }
 
+function TextControl({ value, onCommit, maxChars }: { value: string; onCommit: (v: string) => void; maxChars: number }) {
+  const [draft, setDraft] = useState(value)
+  useEffect(() => setDraft(value), [value])
+  const commit = () => {
+    const next = draft.slice(0, maxChars)
+    if (next !== value) onCommit(next)
+  }
+  return (
+    <textarea
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault()
+          commit()
+        }
+      }}
+      rows={3}
+      className="rounded px-2 py-1 text-xs w-full resize-y"
+      style={{ flex: 1, color: T.text, background: T.bg, border: `1px solid ${T.border}`, fontFamily: T.mono, lineHeight: 1.5 }}
+    />
+  )
+}
+
 function ParamControl({ param, value, onChange }: { param: TuningParam; value: Value; onChange: (v: Value) => void }) {
   if (param.kind === 'boolean') return <Toggle on={Boolean(value)} onChange={onChange} />
   if (param.kind === 'enum') return <Select value={String(value)} onChange={onChange} options={param.options.map((o) => ({ id: o, label: o }))} width={120} />
+  if (param.kind === 'text') return <TextControl value={String(value)} onCommit={onChange} maxChars={param.maxChars ?? 2000} />
   return (
     <span className="flex items-center gap-2" style={{ flex: 1 }}>
       <input type="range" min={param.min} max={param.max} step={param.step} value={Number(value)} onChange={(e) => onChange(Number(e.target.value))} style={{ flex: 1 }} />

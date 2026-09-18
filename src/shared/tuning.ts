@@ -33,7 +33,17 @@ export interface EnumParam extends ParamBase {
   options: readonly string[]
 }
 
-export type TuningParam = NumberParam | BoolParam | EnumParam
+/** Free text, e.g. a comma-separated word list. */
+export interface TextParam extends ParamBase {
+  kind: 'text'
+  default: string
+  maxChars?: number
+}
+
+export type TuningParam = NumberParam | BoolParam | EnumParam | TextParam
+
+export const DEFAULT_FILLER_WORDS =
+  "um, umm, uh, uhh, er, ah, so, and, but, or, the, a, is, that, that's, like, because, which, yeah, well, wait, if, i, you, we, it's, with, for, to, then, basically, also, maybe, where, when, what, how, why, i'll, i'm, i've, we're, it'll, gonna, wanna, of, in, on, at, by, from, about, into, my, your, his, her, our, their, this, these, those, some, kind, sort, mean, really, actually, just, very"
 
 const n = (
   def: number,
@@ -51,10 +61,15 @@ export const TUNING = {
     vadThreshold: n(0.5, 0.2, 0.9, 0.05, 'ear', 'VAD threshold', 'Silero speech probability that opens an utterance while listening. Lower catches quiet speech but breaths and keyboard clicks start false turns.', { unit: 'p', old: 0.5 }),
     minSpeechMs: n(250, 100, 800, 50, 'ear', 'Min speech', 'Total speech needed before an utterance counts. Shorter bursts are blips: dropped silently, never sent to ASR.', { unit: 'ms', old: 250 }),
     minSilenceMs: n(250, 100, 800, 50, 'ear', 'Min silence', 'Silence before Smart Turn starts scoring. This is the floor of end-of-turn latency; below it the model never runs.', { unit: 'ms', old: 250 }),
-    maxSilenceMs: n(1200, 600, 3000, 100, 'ear', 'Max silence', 'Hard end of turn after this much silence, whatever Smart Turn says. Safety net so a mis-scoring model cannot hang a turn.', { unit: 'ms', old: 1200 }),
+    maxSilenceMs: n(1500, 600, 4000, 100, 'ear', 'Max silence', 'Hard end of turn after this much silence while Smart Turn is unsure (score between the low and the done thresholds). Safety net so a mis-scoring model cannot hang a turn.', { unit: 'ms', old: 1200 }),
     checkEveryMs: n(200, 100, 500, 50, 'ear', 'Check every', 'Minimum additional silence between Smart Turn checks. Each check costs 10-30 ms of CPU on the 8 s window.', { unit: 'ms', old: 200 }),
     turnThreshold: n(0.7, 0.4, 0.95, 0.05, 'ear', 'Turn threshold', 'Smart Turn probability below which the turn never ends. Raise if it cuts you off, lower if it waits too long after clear endings.', { unit: 'p', old: 0.7 }),
-    turnHighThreshold: n(0.9, 0.6, 1, 0.05, 'ear', 'Turn high threshold', 'At or above this the turn ends even if the live partial ends on a filler word (um, so, and). Between the two thresholds a trailing filler holds the turn open.', { unit: 'p', old: 0.9 }),
+    turnHighThreshold: n(0.9, 0.6, 1, 0.05, 'ear', 'Turn high threshold', 'At or above this the turn ends even if the live partial ends on a filler word (um, so, and), except once per utterance when "Filler holds high tier" is on. Between the two thresholds a trailing filler always holds the turn open.', { unit: 'p', old: 0.9 }),
+    turnLowThreshold: n(0.3, 0.05, 0.6, 0.05, 'ear', 'Turn low threshold', 'Below this Smart Turn is sure you are mid-thought: the silence cap becomes "Max silence (thinking)" instead of "Max silence", so a pause to think does not end the turn.', { unit: 'p' }),
+    maxSilenceLowMs: n(3000, 1000, 8000, 250, 'ear', 'Max silence (thinking)', 'How long a pause may last while Smart Turn says you are not done. The cost of raising it is a slower reply only when you really did stop on a low score.', { unit: 'ms' }),
+    silencePartialMs: n(100, 32, 400, 16, 'ear', 'Partial on pause after', 'A pause this long forces one partial transcript, so the filler-word guard reads your actual last word instead of a caption up to "Partials every" old.', { unit: 'ms' }),
+    fillerWords: { kind: 'text', default: DEFAULT_FILLER_WORDS, maxChars: 2000, scope: 'ear', label: 'Filler words', doc: 'Comma-separated words that mean "not finished" when a pause lands right after them (um, so, and, then, basically, I\'ll…). Also used by the app to merge a fragment with what you say next.' },
+    fillerHoldsHighTier: { kind: 'boolean', default: true, scope: 'ear', label: 'Filler holds high tier', doc: 'When on, a trailing filler word holds the turn once even at a confident score; the next check 200 ms later decides. Off = the old behaviour (confident score always ends the turn).' },
     bargeInThreshold: n(0.75, 0.4, 0.95, 0.05, 'ear', 'Barge-in VAD', 'Speech probability counted as a hit while the agent is speaking or thinking. Higher than the VAD threshold so speaker bleed and room noise do not build barge-in credit.', { unit: 'p', old: 0.75 }),
     bargeInChunks: n(10, 3, 30, 1, 'ear', 'Barge-in chunks', 'Net 32 ms speech credits needed to cut the agent (10 = about 320 ms of sustained speech).', { unit: 'frames', old: 10 }),
     duckChunks: n(3, 1, 10, 1, 'ear', 'Duck chunks', 'Credits before playback is ducked. A short backchannel ("mhm") reaches this and no further.', { unit: 'frames', old: 3 }),
@@ -63,7 +78,8 @@ export const TUNING = {
     bargeInReleaseChunks: n(6, 2, 20, 1, 'ear', 'Release chunks', 'Consecutive quiet frames after a duck before it is called a finished backchannel and volume is restored (6 = about 190 ms). Avoids duck/undock flicker inside one utterance.', { unit: 'frames', old: 6 }),
     partialEveryMs: n(600, 300, 2000, 100, 'ear', 'Partials every', 'New audio between live partial transcripts. Partials drive the captions and the filler-word guard, so slower partials mean a staler guard.', { unit: 'ms', old: 600 }),
     prerollMs: n(1000, 200, 2000, 100, 'ear', 'Preroll', 'Audio kept before speech is detected and prepended to the utterance so the first syllable is not clipped. Must exceed bargeInChunks x 32 ms or the first word after an interruption is lost.', { unit: 'ms', old: 1000 }),
-    maxUtteranceMs: n(30000, 5000, 120000, 1000, 'ear', 'Max utterance', 'Cap on one utterance; the turn is closed as a timeout when reached.', { unit: 'ms', old: 30000 })
+    maxUtteranceMs: n(120000, 10000, 300000, 5000, 'ear', 'Max utterance', 'Absolute cap on one utterance. Long monologues are transcribed in segments before this (see "Segment every"), so this only stops a stuck microphone.', { unit: 'ms', old: 30000 }),
+    segmentEveryMs: n(30000, 10000, 120000, 5000, 'ear', 'Segment every', 'While you keep talking, the older part of the utterance is transcribed every this often and shown in your bubble; the turn does not end. Lower = your words appear sooner; each segment costs one decode.', { unit: 'ms' })
   },
   brain: {
     firstTokenTimeoutMs: n(8000, 2000, 30000, 500, 'core', 'First token timeout', 'Give up on a model that has produced nothing after this long; retry once, then the fallback model.', { unit: 'ms', old: 8000 }),
@@ -77,7 +93,10 @@ export const TUNING = {
     toolResultKeepChars: n(700, 100, 4000, 50, 'core', 'Tool result keep', 'Characters of each tool result kept in history for later turns. The model already used the full result; this keeps context lean and fast.', { unit: 'chars', old: 700 }),
     temperature: n(0.6, 0, 1.5, 0.05, 'core', 'Temperature', 'Sampling temperature for the reply.', { old: 0.6 }),
     maxTokens: n(1000, 100, 4000, 50, 'core', 'Max tokens', 'Output token cap per model call. Spoken replies rarely need more than a few hundred; comprehensive styles need headroom.', { unit: 'tokens', old: 300 }),
-    groqReasoningEffort: { kind: 'enum', default: 'low', options: ['low', 'medium', 'high', 'default'], scope: 'core', label: 'Groq reasoning effort', doc: 'Reasoning budget for Groq reasoning models (gpt-oss, qwen). Voice cannot wait for long thinking, so low is the default.', old: 'low' }
+    groqReasoningEffort: { kind: 'enum', default: 'low', options: ['low', 'medium', 'high', 'default'], scope: 'core', label: 'Groq reasoning effort', doc: 'Reasoning budget for Groq reasoning models (gpt-oss, qwen). Voice cannot wait for long thinking, so low is the default.', old: 'low' },
+    continuationWindowMs: n(2500, 0, 6000, 250, 'core', 'Continuation window', 'If a transcript looks unfinished (ends on a filler word, fewer than "Merge min words", or a timeout on a low score) and you start speaking again within this long, the reply is cancelled silently and the two pieces become one turn. 0 disables merging.', { unit: 'ms' }),
+    mergeMinWords: n(4, 1, 10, 1, 'core', 'Merge min words', 'Transcripts shorter than this always count as unfinished for the continuation window ("Yeah, so basically").', { unit: 'words' }),
+    mergeHoldMs: n(0, 0, 2000, 100, 'core', 'Hold reply when unfinished', 'Wait this long before sending an unfinished-looking transcript to the model, so a continuation merges without ever starting a reply. Costs latency on real endings that happen to look unfinished; 0 = reply immediately and cancel if you continue.', { unit: 'ms' })
   },
   speech: {
     firstMinWords: n(6, 0, 15, 1, 'core', 'First clause min words', 'The first chunk of a reply may be cut at a comma/colon/dash once it has this many words, so speech starts before the first full sentence. 0 disables.', { unit: 'words', old: 6 }),
@@ -148,6 +167,7 @@ export function coerceParam(param: TuningParam, value: unknown): number | boolea
     return Math.min(param.max, Math.max(param.min, v))
   }
   if (param.kind === 'boolean') return typeof value === 'boolean' ? value : param.default
+  if (param.kind === 'text') return typeof value === 'string' ? value.slice(0, param.maxChars ?? 2000) : param.default
   return typeof value === 'string' && param.options.includes(value) ? value : param.default
 }
 

@@ -10,7 +10,8 @@ import type {
   SessionSummary,
   Settings,
   Skill,
-  TurnMetrics
+  TurnMetrics,
+  UserTiming
 } from '@shared/types'
 import { GLOBAL_SCOPE, type MemoryStore } from './memory/store'
 import { LocationProvider, relativeTime, timeContext } from './context'
@@ -34,6 +35,7 @@ import { StateMachine } from './turn/state-machine'
 import { TurnRunner } from './turn/runner'
 import { buildModelMessages, compactToolResult } from './turn/history'
 import { splitSpoken, type CutPoint, type SpokenChunk } from './turn/spoken'
+import { mergeTexts, parseFillerWords, unfinishedReason } from './turn/continuation'
 import { summarize } from './metrics/summary'
 import type { Trace } from './trace'
 
@@ -63,7 +65,31 @@ export interface SpeechEndInfo {
   silenceMs: number
   turnP: number | null
   speechMs?: number
+  capMs?: number | null
+  segments?: number
 }
+
+interface VoiceMeta {
+  asrMs?: number
+  queuedMs?: number
+  afterCut?: boolean
+  /** Continue an existing user bubble (segments, merged fragments) instead of creating one. */
+  reuseUserId?: string
+  parts?: number
+  segments?: number
+}
+
+const sleep = (ms: number, signal: AbortSignal): Promise<void> =>
+  new Promise((resolve) => {
+    if (signal.aborted || ms <= 0) return resolve()
+    const t = setTimeout(done, ms)
+    function done(): void {
+      clearTimeout(t)
+      signal.removeEventListener('abort', done)
+      resolve()
+    }
+    signal.addEventListener('abort', done, { once: true })
+  })
 
 interface ActiveTurn {
   id: string
@@ -110,6 +136,12 @@ export class Agent {
   private micOn = false
   private lastSpokenText = ''
   private lastSpeechEnd: (SpeechEndInfo & { at: number }) | null = null
+  /** The running turn answers a transcript that looked unfinished; a resume inside the window merges. */
+  private mergeable: { turnId: string; userMsgId: string; text: string; expiresAt: number; parts: number; reason: string } | null = null
+  /** A fragment whose reply was cancelled; the next final is appended to it. */
+  private mergePending: { userMsgId: string; text: string; parts: number; since: number } | null = null
+  /** Segments of a long utterance that is still open. */
+  private segmentBuffer: { userMsgId: string; texts: string[] } | null = null
   selfCutSuspects = 0
 
   constructor(private readonly deps: AgentDeps) {
@@ -192,7 +224,45 @@ export class Agent {
       this.sm.resumeUser()
       return
     }
+    this.tryContinuation()
     this.sm.speechStart()
+  }
+
+  /** The user resumed inside the continuation window: drop the fragment's reply, keep its text for merging. */
+  private tryContinuation(): boolean {
+    const m = this.mergeable
+    if (!m) return false
+    const now = Date.now()
+    if (this.turn?.id !== m.turnId || now > m.expiresAt) {
+      this.mergeable = null
+      return false
+    }
+    const window = this.deps.settings().brain.continuationWindowMs
+    this.tr('turn.continuation', { reason: m.reason, gapMs: Math.max(0, now - (m.expiresAt - window)), parts: m.parts, text: m.text })
+    this.mergePending = { userMsgId: m.userMsgId, text: m.text, parts: m.parts, since: now }
+    this.mergeable = null
+    this.cancelTurn('continuation')
+    return true
+  }
+
+  /** A long utterance's older part arrived while the user is still talking. */
+  onSegment(text: string, index: number): void {
+    const clean = text.trim()
+    if (!this.segmentBuffer) {
+      const id = crypto.randomUUID()
+      this.segmentBuffer = { userMsgId: id, texts: [] }
+      const base = this.mergePending ? this.mergePending.text : ''
+      const user: ChatMessage = { id, turnId: `pending-${id}`, sessionId: this.sessionId, role: 'user', text: base, via: 'voice', streaming: true, createdAt: Date.now() }
+      this.upsert(user)
+    }
+    this.segmentBuffer.texts[index] = clean
+    const msg = this.messages.find((x) => x.id === this.segmentBuffer!.userMsgId)
+    if (msg) {
+      const base = this.mergePending ? this.mergePending.text : ''
+      msg.text = this.segmentBuffer.texts.reduce((acc, t) => mergeTexts(acc, t ?? ''), base)
+      this.upsert(msg)
+    }
+    this.tr('turn.segment', { index, chars: clean.length, text: clean })
   }
 
   onPartial(text: string): void {
@@ -205,26 +275,43 @@ export class Agent {
     this.deps.emit({ type: 'partial', text: '' })
   }
 
-  onFinal(text: string, asrMs: number, meta: { afterCut?: boolean; durationMs?: number; queuedMs?: number } = {}): void {
-    const clean = text.trim()
+  onFinal(text: string, asrMs: number, meta: { afterCut?: boolean; durationMs?: number; queuedMs?: number; segments?: number } = {}): void {
+    const tail = text.trim()
     this.deps.emit({ type: 'partial', text: '' })
-    const tooShort = clean.length < this.deps.settings().brain.minUtteranceChars || /^[\s.,!?]*$/.test(clean)
+    const tooShort = tail.length < this.deps.settings().brain.minUtteranceChars || /^[\s.,!?]*$/.test(tail)
     if (meta.afterCut) {
       // an interruption whose transcript is empty or echoes what the agent was saying is probably
       // the agent hearing itself through the speakers; count it so the echo gate decision has data
-      const overlap = tooShort ? 1 : wordOverlap(clean, this.lastSpokenText)
+      const overlap = tooShort ? 1 : wordOverlap(tail, this.lastSpokenText)
       if (overlap >= 0.6) {
         this.selfCutSuspects++
-        this.tr('turn.self_cut_suspect', { text: clean, overlap: Math.round(overlap * 100) / 100, durationMs: meta.durationMs, total: this.selfCutSuspects })
+        this.tr('turn.self_cut_suspect', { text: tail, overlap: Math.round(overlap * 100) / 100, durationMs: meta.durationMs, total: this.selfCutSuspects })
       }
     }
-    if (tooShort) {
-      this.tr('turn.dropped', { reason: 'empty-transcript', chars: clean.length, asrMs, afterCut: meta.afterCut === true })
+    // assemble: [fragment whose reply was cancelled] + [segments of a long utterance] + tail
+    const segments = this.segmentBuffer
+    const pending = this.mergePending
+    this.segmentBuffer = null
+    this.mergePending = null
+    let full = segments ? segments.texts.reduce((acc, t) => mergeTexts(acc, t ?? ''), '') : ''
+    full = mergeTexts(full, tail)
+    if (pending) full = mergeTexts(pending.text, full)
+    const parts = (pending?.parts ?? 1) + (pending ? 1 : 0)
+    if (!full.trim() || (tooShort && !segments && !pending)) {
+      this.tr('turn.dropped', { reason: 'empty-transcript', chars: tail.length, asrMs, afterCut: meta.afterCut === true })
       this.sm.blip()
       if (this.sm.state === 'thinking') this.sm.done()
       return
     }
-    void this.handleInput(clean, 'voice', { asrMs, queuedMs: meta.queuedMs })
+    if (pending) this.tr('turn.merged', { parts, waitedMs: Date.now() - pending.since, text: full })
+    void this.handleInput(full, 'voice', {
+      asrMs,
+      queuedMs: meta.queuedMs,
+      afterCut: meta.afterCut,
+      reuseUserId: segments?.userMsgId ?? pending?.userMsgId,
+      parts: pending ? parts : undefined,
+      segments: segments ? segments.texts.length : meta.segments
+    })
   }
 
   onBargeIn(stage: 'duck' | 'cut' | 'release'): void {
@@ -232,6 +319,10 @@ export class Agent {
     else if (stage === 'release') this.deps.emit({ type: 'duck', gain: 1 })
     else {
       this.deps.emit({ type: 'duck', gain: 1 })
+      if (this.tryContinuation()) {
+        this.stopReading()
+        return
+      }
       if (this.sm.bargeIn()) this.cancelTurn('barge-in', true)
       this.stopReading()
     }
@@ -295,13 +386,32 @@ export class Agent {
     await this.handleInput(text.trim(), 'text')
   }
 
-  private async handleInput(text: string, via: 'voice' | 'text', voiceMeta: { asrMs?: number; queuedMs?: number } = {}): Promise<void> {
+  private async handleInput(text: string, via: 'voice' | 'text', voiceMeta: VoiceMeta = {}): Promise<void> {
     if (!text) return
     if (this.turn) this.cancelTurn('new-input')
     this.stopReading()
     const settings = this.deps.settings()
     const turnId = crypto.randomUUID()
-    const user: ChatMessage = { id: crypto.randomUUID(), turnId, sessionId: this.sessionId, role: 'user', text, via, createdAt: Date.now() }
+    const speechEnd = via === 'voice' ? this.lastSpeechEnd : null
+    this.lastSpeechEnd = null
+    const timing: UserTiming | undefined = speechEnd
+      ? {
+          speechMs: speechEnd.speechMs,
+          silenceMs: speechEnd.silenceMs,
+          endReason: speechEnd.reason,
+          turnP: speechEnd.turnP,
+          capMs: speechEnd.capMs ?? null,
+          merged: (voiceMeta.parts ?? 1) > 1 || undefined,
+          parts: voiceMeta.parts,
+          segments: voiceMeta.segments || undefined,
+          cutAgent: voiceMeta.afterCut || undefined,
+          speechEndAt: speechEnd.at
+        }
+      : undefined
+    const existing = voiceMeta.reuseUserId ? this.messages.find((m) => m.id === voiceMeta.reuseUserId) : undefined
+    const user: ChatMessage = existing
+      ? { ...existing, turnId, text, timing, streaming: false }
+      : { id: crypto.randomUUID(), turnId, sessionId: this.sessionId, role: 'user', text, via, timing, createdAt: Date.now() }
     this.upsert(user)
     if (this.messages.filter((m) => m.role === 'user').length === 1) {
       this.deps.store.renameSession(this.sessionId, text.split(/\s+/).slice(0, 7).join(' ').slice(0, 60))
@@ -330,8 +440,6 @@ export class Agent {
       },
       controller.signal
     )
-    const speechEnd = via === 'voice' ? this.lastSpeechEnd : null
-    this.lastSpeechEnd = null
     const turn: ActiveTurn = {
       id: turnId,
       controller,
@@ -350,6 +458,27 @@ export class Agent {
     this.sm.think()
     this.deps.ears.agentThinking(true)
     this.deps.ears.agentSpeaking(true)
+
+    // an unfinished-looking transcript: answer, but let a quick resume merge into this turn instead
+    this.mergeable = null
+    if (via === 'voice' && settings.brain.continuationWindowMs > 0) {
+      const reason = unfinishedReason(text, {
+        endReason: speechEnd?.reason,
+        turnP: speechEnd?.turnP,
+        fillerWords: parseFillerWords(settings.endpoint.fillerWords),
+        minWords: settings.brain.mergeMinWords,
+        lowP: settings.endpoint.turnLowThreshold
+      })
+      if (reason) {
+        const from = speechEnd?.at ?? Date.now()
+        this.mergeable = { turnId, userMsgId: user.id, text, expiresAt: from + settings.brain.continuationWindowMs, parts: voiceMeta.parts ?? 1, reason }
+        this.tr('turn.mergeable', { reason, windowMs: settings.brain.continuationWindowMs, holdMs: settings.brain.mergeHoldMs })
+        if (settings.brain.mergeHoldMs > 0) {
+          await sleep(settings.brain.mergeHoldMs, controller.signal)
+          if (this.turn !== turn) return
+        }
+      }
+    }
 
     const style = this.style(settings)
     const model = findModel(settings.modelId) ?? findModel('anthropic:claude-haiku-4-5')!
@@ -376,6 +505,10 @@ export class Agent {
       endReason: speechEnd?.reason,
       silenceMs: speechEnd?.silenceMs,
       turnP: speechEnd?.turnP,
+      capMs: speechEnd?.capMs,
+      parts: voiceMeta.parts,
+      segments: voiceMeta.segments,
+      afterCut: voiceMeta.afterCut,
       model: model.id,
       fallback: fallback?.id ?? null,
       style: style.id,
@@ -534,6 +667,7 @@ export class Agent {
 
   private finishTurn(t: ActiveTurn): void {
     if (this.turn !== t) return
+    if (this.mergeable?.turnId === t.id) this.mergeable = null
     const a = t.assistant
     if (a) {
       a.metrics = { ...a.metrics, totalMs: Date.now() - t.startedAt, fillers: t.speaker.fillers, interrupted: false }
@@ -571,13 +705,22 @@ export class Agent {
     if (!t) return
     this.deps.log(`cancel turn ${t.id}: ${reason}`)
     this.turn = null
+    if (this.mergeable?.turnId === t.id) this.mergeable = null
     t.controller.abort()
     this.deps.cancelAudio(t.id)
     this.deps.emit({ type: 'cue', on: false })
     this.deps.emit({ type: 'duck', gain: 1 })
     this.deps.ears.agentSpeaking(false)
     this.deps.ears.agentThinking(false)
-    const a = t.assistant
+    let a = t.assistant
+    if (a && reason === 'continuation' && t.startedSeqs.size === 0) {
+      // the user was still talking; nothing was heard, so the reply never happened
+      this.messages = this.messages.filter((m) => m.id !== a!.id)
+      this.deps.store.deleteMessage(a.id)
+      this.deps.emit({ type: 'message-removed', id: a.id })
+      t.assistant = null
+      a = null
+    }
     if (a) {
       a.streaming = false
       if (a.text) {

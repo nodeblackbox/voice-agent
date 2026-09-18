@@ -35,7 +35,7 @@ describe('SettingsService', () => {
     s.set({ voice: { ...s.get().voice, voice: 'en-GB-SoniaNeural' }, endpoint: { ...s.get().endpoint, duckGain: 0.1 } })
     expect(s.get().voice).toMatchObject({ voice: 'en-GB-SoniaNeural', rate: 1 })
     expect(s.get().endpoint.duckGain).toBe(0.1)
-    expect(s.get().endpoint.maxSilenceMs).toBe(1200)
+    expect(s.get().endpoint.maxSilenceMs).toBe(DEFAULT_SETTINGS.endpoint.maxSilenceMs)
     expect(seen).toEqual(['en-GB-SoniaNeural'])
     const reloaded = new SettingsService(dir, env)
     expect(reloaded.get().voice.voice).toBe('en-GB-SoniaNeural')

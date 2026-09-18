@@ -37,15 +37,40 @@ def test_below_min_silence_never_scores():
 def test_max_silence_is_a_timeout_even_without_a_model():
     ep = Endpointer(EndpointConfig(), None)
     ep.start_utterance()
-    assert ep.update(lambda: AUDIO, 1199) is None
-    assert ep.update(lambda: AUDIO, 1200) == "timeout"
+    assert ep.update(lambda: AUDIO, 1499) is None
+    assert ep.update(lambda: AUDIO, 1500) == "timeout"
 
 
 def test_no_model_degrades_to_plain_hangover():
     ep = Endpointer(EndpointConfig(), None)
     ep.start_utterance()
-    assert all(ep.update(lambda: AUDIO, ms) is None for ms in (250, 400, 800, 1100))
-    assert ep.update(lambda: AUDIO, 1300) == "timeout"
+    assert all(ep.update(lambda: AUDIO, ms) is None for ms in (250, 400, 800, 1400))
+    assert ep.update(lambda: AUDIO, 1600) == "timeout"
+
+
+def test_silence_cap_waits_longer_while_the_model_says_not_done():
+    # the user is thinking: Smart Turn is sure they are not finished, so the cap is max_silence_low_ms
+    ep, _ = make(0.05, max_silence_ms=1500, max_silence_low_ms=3000, turn_low_threshold=0.3)
+    assert ep.update(lambda: AUDIO, 300) is None
+    assert ep.cap_ms == 3000
+    assert ep.update(lambda: AUDIO, 1600) is None
+    assert ep.update(lambda: AUDIO, 2999) is None
+    assert ep.update(lambda: AUDIO, 3000) == "timeout"
+    assert ep.trace[-1]["capMs"] == 3000
+
+
+def test_silence_cap_is_normal_when_the_model_is_unsure():
+    ep, _ = make(0.5)
+    assert ep.update(lambda: AUDIO, 300) is None
+    assert ep.cap_ms == 1500
+    assert ep.update(lambda: AUDIO, 1500) == "timeout"
+
+
+def test_confident_score_ends_the_turn_even_under_the_low_cap():
+    ep, _ = make(0.05, 0.05, 0.95)
+    assert ep.update(lambda: AUDIO, 300) is None
+    assert ep.update(lambda: AUDIO, 600) is None
+    assert ep.update(lambda: AUDIO, 900, "so that is it") == "done"
 
 
 def test_scoring_cadence_honours_check_every_ms():
@@ -91,9 +116,30 @@ def test_mid_confidence_ends_on_a_real_word():
     assert ep.held_on_filler == 0
 
 
-def test_high_confidence_overrides_filler_word():
+def test_high_confidence_with_filler_word_holds_once_then_ends():
     ep, _ = make(0.95)
+    assert ep.update(lambda: AUDIO, 300, "and um") is None
+    assert ep.held_on_filler == 1
+    assert ep.update(lambda: AUDIO, 500, "and um") == "done"
+
+
+def test_high_confidence_overrides_filler_word_when_the_hold_is_off():
+    ep, _ = make(0.95, filler_holds_high_tier=False)
     assert ep.update(lambda: AUDIO, 300, "and um") == "done"
+
+
+def test_filler_words_come_from_config_and_hot_swap():
+    ep, _ = make(0.8, filler_words="banana, then")
+    assert ep.update(lambda: AUDIO, 300, "I said banana") is None
+    ep.cfg.update({"fillerWords": "cherry"})
+    assert ep.update(lambda: AUDIO, 500, "I said banana") == "done"
+    assert ep.last_word == "banana"
+
+
+@pytest.mark.parametrize("trailing", ["and then I'll", "so basically", "I want to", "it's kind of"])
+def test_common_mid_thought_endings_hold(trailing):
+    ep, _ = make(0.8)
+    assert ep.update(lambda: AUDIO, 300, trailing) is None
 
 
 def test_mid_confidence_with_no_transcript_ends():

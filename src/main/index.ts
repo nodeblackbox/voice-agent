@@ -127,10 +127,13 @@ app.whenReady().then(async () => {
           agent.onPartial(evt.text)
           break
         case 'speech_end':
-          agent.onSpeechEnd({ reason: evt.reason, silenceMs: evt.silenceMs, turnP: evt.turnP, speechMs: evt.speechMs })
+          agent.onSpeechEnd({ reason: evt.reason, silenceMs: evt.silenceMs, turnP: evt.turnP, speechMs: evt.speechMs, capMs: evt.capMs ?? null, segments: evt.segments })
+          break
+        case 'segment':
+          agent.onSegment(evt.text, evt.index)
           break
         case 'final':
-          agent.onFinal(evt.text, evt.asrMs, { afterCut: evt.afterCut === true, durationMs: evt.durationMs, queuedMs: evt.queuedMs })
+          agent.onFinal(evt.text, evt.asrMs, { afterCut: evt.afterCut === true, durationMs: evt.durationMs, queuedMs: evt.queuedMs, segments: evt.segments })
           break
         case 'bargein':
           agent.onBargeIn(evt.stage)
