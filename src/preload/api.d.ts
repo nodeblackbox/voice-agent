@@ -4,6 +4,7 @@ import type {
   ChatMessage,
   ContextSnapshot,
   KeyStatus,
+  LogFileInfo,
   LogLevel,
   McpServerConfig,
   McpServerStatus,
@@ -17,7 +18,9 @@ import type {
   Provider,
   ServiceStatus,
   Session,
+  SessionSummary,
   Settings,
+  TraceEvent,
   VoiceInfo
 } from '../shared/types'
 
@@ -100,6 +103,16 @@ export interface VoiceAgentApi {
   shell: { open(url: string): Promise<void> }
   /** Renderer log lines land in the main process log files (through the same flood guard). */
   log: { write(level: LogLevel, scope: string, msg: string): void }
+  diag: {
+    logs(): Promise<LogFileInfo[]>
+    tail(name: string, lines?: number): Promise<string[]>
+    openLogsFolder(): Promise<void>
+    /** Markdown report: setup, services, tuning diff, session summary, last turn timeline, recent errors. */
+    report(): Promise<string>
+    trace(sessionId?: string | null, limit?: number): Promise<TraceEvent[]>
+    lastTurn(): Promise<TraceEvent[]>
+    summary(): Promise<SessionSummary>
+  }
   onEvent(handler: (event: AgentEvent) => void): () => void
   onAudioChunk(handler: (chunk: AudioChunk) => void): () => void
   onAudioCancel(handler: (turnId: string | null) => void): () => void

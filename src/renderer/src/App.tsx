@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { AlignLeft, Brain, FolderKanban, MessageSquare, Settings, Zap } from 'lucide-react'
+import { Activity, AlignLeft, Brain, FolderKanban, MessageSquare, Settings, Zap } from 'lucide-react'
 import { T } from './theme'
 import { useStore, type View } from './state/store'
 import { IconBtn } from './components/primitives'
@@ -10,6 +10,7 @@ import { SkillsView } from './views/SkillsView'
 import { MemoryView } from './views/MemoryView'
 import { ProjectsView } from './views/ProjectsView'
 import { SettingsView } from './views/SettingsView'
+import { DiagnosticsView } from './views/DiagnosticsView'
 import { toggleListening } from './audio/voice'
 
 const NAV: Array<{ id: View; icon: typeof MessageSquare; label: string }> = [
@@ -17,7 +18,8 @@ const NAV: Array<{ id: View; icon: typeof MessageSquare; label: string }> = [
   { id: 'prompts', icon: AlignLeft, label: 'Prompts' },
   { id: 'skills', icon: Zap, label: 'Skills' },
   { id: 'memory', icon: Brain, label: 'Memory' },
-  { id: 'projects', icon: FolderKanban, label: 'Projects' }
+  { id: 'projects', icon: FolderKanban, label: 'Projects' },
+  { id: 'diagnostics', icon: Activity, label: 'Diagnostics' }
 ]
 
 export default function App() {
@@ -62,6 +64,7 @@ export default function App() {
           {view === 'skills' && <SkillsView />}
           {view === 'memory' && <MemoryView />}
           {view === 'projects' && <ProjectsView />}
+          {view === 'diagnostics' && <DiagnosticsView />}
           {view === 'settings' && <SettingsView />}
         </>
       )}

@@ -7,7 +7,7 @@ import { earConfig } from '@shared/tuning'
 import { Agent } from '@core/agent'
 import { MemoryStore } from '@core/memory/store'
 import { findModel } from '@core/providers/models'
-import { initLog, log, logAt, trace, type LogLevel } from './services/log'
+import { initLog, log, logAt, trace, tracePath, type LogLevel } from './services/log'
 import { SettingsService } from './services/settings'
 import { SidecarService } from './services/sidecar'
 import { SearxngService } from './services/searxng'
@@ -229,6 +229,14 @@ app.whenReady().then(async () => {
   if (settings.get().behaviour.listenOnLaunch) sidecar.start()
   void mcp.reload()
   if (isDev && process.env.VA_SAY) setTimeout(() => void agent.send(process.env.VA_SAY!), 4000)
+  if (isDev && process.env.VA_VIEW) {
+    // switch to a rail view by its label (e.g. Diagnostics) before a VA_SCREENSHOT is taken
+    setTimeout(() => {
+      void win?.webContents
+        .executeJavaScript(`(() => { const b = document.querySelector('button[aria-label="${process.env.VA_VIEW!.replace(/"/g, '')}"]'); if (!b) return 'no-button'; b.click(); return 'clicked' })()`)
+        .then((r) => log('devtools', `view ${process.env.VA_VIEW}: ${String(r)}`))
+    }, Number(process.env.VA_VIEW_DELAY ?? 12000))
+  }
   if (isDev && process.env.VA_MIC) {
     // press the Voice button from outside to exercise the real getUserMedia -> worklet -> sidecar path
     const press = (): void => {
@@ -270,6 +278,8 @@ app.whenReady().then(async () => {
 
   app.on('before-quit', () => {
     agent.shutdown()
+    // VA_TRACE=1: print where this session's trace landed so scripted runs can pick it up
+    if (process.env.VA_TRACE) console.log(`VA_TRACE ${tracePath() ?? 'none'}`)
     sidecar.stop()
     searxng.stop()
     void mcp.stop()

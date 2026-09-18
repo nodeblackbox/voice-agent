@@ -22,7 +22,7 @@ import { cue } from '../audio/cue'
 import { listDevices, pickDefaults } from '../audio/devices'
 import { rlog } from '../lib/rlog'
 
-export type View = 'chat' | 'prompts' | 'skills' | 'memory' | 'projects' | 'settings'
+export type View = 'chat' | 'prompts' | 'skills' | 'memory' | 'projects' | 'diagnostics' | 'settings'
 
 const MUTED_KEY = 'va.muted'
 const LEFT_KEY = 'va.leftOpen'
@@ -329,6 +329,7 @@ export const useStore = create<Store>((set, get) => ({
   dismissToast: (id) => set({ toasts: get().toasts.filter((t) => t.id !== id) }),
   pushToast: (kind, text) => {
     const toast: Toast = { id: crypto.randomUUID(), kind, text }
+    rlog(kind === 'error' ? 'error' : kind === 'warn' ? 'warn' : 'info', 'toast', text)
     set({ toasts: [...get().toasts, toast] })
     setTimeout(() => get().dismissToast(toast.id), kind === 'error' ? 9000 : 6000)
   },

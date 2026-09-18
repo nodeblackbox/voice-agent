@@ -167,6 +167,36 @@ transcript keeps the full markdown.
 | Edge TTS failure | Retry the sentence once → skip it → after 3 consecutive failures, system voice for the rest of the turn + one toast. |
 | Barge-in during a tool | Same cancel path; late tool results are discarded by turn id. |
 
+## Observability
+
+Every behavioural number is a documented tuning parameter (`src/shared/tuning.ts`,
+[TUNING.md](TUNING.md)); every turn is reconstructible from the session trace
+(`logs/sessions/<sessionId>.jsonl`, [DEBUGGING.md](DEBUGGING.md)).
+
+```mermaid
+flowchart LR
+  subgraph sources
+    C["agent core<br/>state · turn.* · tts.* · playback.*"]
+    E["ear sidecar<br/>speech_start/end · final · bargein · stats"]
+    S["sidecar supervisor<br/>spawn · ready · reconnect · idle"]
+    R["renderer<br/>console errors · capture/playback warnings"]
+  end
+  G["flood guard<br/>≤3 repeats / 10 s per template<br/>≤20 lines / s per scope"]
+  C --> T["sessions/&lt;sid&gt;.jsonl<br/>structured trace"]
+  E --> T
+  S --> T
+  C --> G
+  E --> G
+  S --> G
+  R --> G
+  G --> A["app.log (rotated)"]
+  G --> X["errors.log (warn+)"]
+  T --> D["Diagnostics view<br/>last-turn timeline · p50/p95 · ear stats<br/>Copy diagnostics → Markdown"]
+```
+
+Per-frame data (VAD levels) never reaches disk. Transcript text can be redacted from the trace with
+`runtime.logTranscripts`.
+
 ## Testing
 
 ```mermaid

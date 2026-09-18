@@ -46,6 +46,13 @@ export const IPC = {
   sidecarRestart: 'sidecar:restart',
   contextSnapshot: 'context:snapshot',
   openExternal: 'shell:open',
+  logsList: 'logs:list',
+  logsTail: 'logs:tail',
+  logsOpenFolder: 'logs:open-folder',
+  diagReport: 'diag:report',
+  traceSession: 'trace:session',
+  traceLastTurn: 'trace:last-turn',
+  sessionSummary: 'session:summary',
 
   // renderer -> main (send, fire and forget)
   logWrite: 'log:write',

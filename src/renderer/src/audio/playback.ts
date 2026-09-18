@@ -201,7 +201,9 @@ export const playback = {
     duck = Math.min(1, Math.max(0, gain))
     applyGain()
   },
-  configure(p: PlaybackSettings): void {
+  configure(p: PlaybackSettings | undefined): void {
+    // a main process older than this renderer (dev hot reload) may not send the group yet
+    if (!p) return
     gapS = p.gapMs / 1000
     rampS = p.duckRampMs / 1000
   },

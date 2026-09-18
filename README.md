@@ -115,10 +115,10 @@ docs/           architecture, diagrams, screenshots
 ## Testing
 
 ```powershell
-pnpm test                   # 127 vitest tests: core (mock LLM, temp SQLite), main services, renderer (jsdom)
+pnpm test                   # vitest: core (mock LLM, temp SQLite), main services, renderer (jsdom)
 pnpm test:coverage
 pnpm typecheck
-python -m pytest sidecar/tests -q      # 76 pytest tests with fake models; no GPU or torch needed
+cd sidecar; python -m pytest tests -q  # pytest with fake models; no GPU or torch needed
 ```
 
 CI runs all of it on every push. The Python suite deliberately runs without `torch` or
@@ -128,8 +128,15 @@ CI runs all of it on every push. The Python suite deliberately runs without `tor
 
 Set before `pnpm dev`: `VA_SAY="..."` sends a typed message after launch; `VA_WAV=file.wav`
 replays a 16 kHz mono wav through the ears (`VA_WAV2` injects a second one while the agent speaks,
-to test barge-in); `VA_SCREENSHOT=out.png` captures the window after `VA_SCREENSHOT_DELAY` ms.
-Logs live in `%APPDATA%/Voice Agent/logs/`.
+to test barge-in); `VA_MIC=1` presses the Voice button for you; `VA_SCREENSHOT=out.png` captures
+the window after `VA_SCREENSHOT_DELAY` ms; `VA_TRACE=1` prints the session trace path on quit.
+
+Logs live in `%APPDATA%/Voice Agent/logs/`: `app.log` (rotated, flood-guarded), `errors.log`, and
+`sessions/<id>.jsonl` — a structured trace of every turn. The Diagnostics view shows the last turn
+as a timeline with the latency numbers, session p50/p95, ear stats and recent errors, and **Copy
+diagnostics** produces a self-contained Markdown report. See `docs/DEBUGGING.md` for the event
+vocabulary and `docs/TUNING.md` for every tuning parameter (Settings → Tuning; export/import
+profiles as JSON).
 
 ## Roadmap
 

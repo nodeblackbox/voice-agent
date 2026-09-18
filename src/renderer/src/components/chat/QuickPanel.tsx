@@ -1,6 +1,6 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { X } from 'lucide-react'
-import type { ServiceName } from '@shared/types'
+import type { ServiceName, SessionSummary } from '@shared/types'
 import { T, serviceColor, serviceLabel } from '../../theme'
 import { selectActiveStyle, useStore } from '../../state/store'
 import { Dot, IconBtn, SectionTitle } from '../primitives'
@@ -20,11 +20,24 @@ export function QuickPanel() {
   const context = useStore((s) => s.context)
   const style = useStore(selectActiveStyle)
   const setRightOpen = useStore((s) => s.setRightOpen)
+  const setView = useStore((s) => s.setView)
   const reloadContext = useStore((s) => s.reloadContext)
+  const lastMetrics = useStore((s) => s.lastMetrics)
+  const messages = useStore((s) => s.messages)
+  const [summary, setSummary] = useState<SessionSummary | null>(null)
 
   useEffect(() => {
     void reloadContext()
   }, [reloadContext])
+
+  useEffect(() => {
+    window.api.diag
+      .summary()
+      .then(setSummary)
+      .catch(() => setSummary(null))
+  }, [messages.length])
+
+  const felt = summary?.latency.speechEndToAudioMs
 
   return (
     <aside className="flex flex-col p-4 gap-5" style={{ width: 260, background: T.rail, borderLeft: `1px solid ${T.border}` }}>
@@ -48,6 +61,33 @@ export function QuickPanel() {
             </div>
           )
         })}
+      </div>
+      <div className="flex flex-col gap-2">
+        <SectionTitle>Latency</SectionTitle>
+        <span className="text-xs" style={{ color: T.text2, fontFamily: T.mono, lineHeight: 1.7 }}>
+          {lastMetrics?.speechEndToAudioMs !== undefined ? (
+            <>
+              last: {Math.round(lastMetrics.speechEndToAudioMs)} ms speech end → audio
+              <br />
+            </>
+          ) : lastMetrics?.ttfaMs !== undefined ? (
+            <>
+              last: {Math.round(lastMetrics.ttfaMs)} ms to first audio
+              <br />
+            </>
+          ) : null}
+          {felt ? `session: p50 ${felt.p50} · p95 ${felt.p95} ms (${felt.n} voice turns)` : 'no voice turns yet'}
+          {lastMetrics?.endReason && (
+            <>
+              <br />
+              turn ended: {lastMetrics.endReason}
+              {lastMetrics.turnP !== undefined && lastMetrics.turnP !== null ? ` at p=${lastMetrics.turnP}` : ''} after {lastMetrics.silenceMs} ms
+            </>
+          )}
+        </span>
+        <button onClick={() => setView('diagnostics')} className="text-xs text-left" style={{ color: T.cyan, background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+          open diagnostics →
+        </button>
       </div>
       <div className="flex flex-col gap-2">
         <SectionTitle>Injected every turn</SectionTitle>

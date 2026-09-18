@@ -115,6 +115,24 @@ export interface TurnMetrics {
   hitStepLimit?: boolean
 }
 
+/** One line of the session trace (logs/sessions/<sid>.jsonl); vocabulary in docs/DEBUGGING.md. */
+export interface TraceEvent {
+  /** Dotted event name: state, ear.final, turn.start, tts.sentence, playback.started, sidecar.ready … */
+  ev: string
+  /** Session the event belongs to; omitted for process-level events, which land in the current session. */
+  sid?: string
+  turn?: string
+  t?: string
+  [key: string]: unknown
+}
+
+export interface LogFileInfo {
+  /** File name, with a `sessions/` prefix for per-session traces. */
+  name: string
+  bytes: number
+  modifiedAt: number
+}
+
 export interface SessionSummary {
   turns: number
   voiceTurns: number

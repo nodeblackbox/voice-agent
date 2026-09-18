@@ -508,6 +508,7 @@ export class Agent {
       if (this.turn !== turn) return
       turn.llmDone = true
       if (turn.drained) this.finishTurn(turn)
+      else this.armDrainTimeout(turn)
     } catch (e) {
       if (this.turn !== turn) return
       this.deps.log(`turn failed: ${(e as Error).message}`)
@@ -517,6 +518,18 @@ export class Agent {
       this.upsert(assistant)
       this.finishTurn(turn)
     }
+  }
+
+  /** If the renderer never reports the audio drained (device error, closed window), do not hang in "speaking". */
+  private armDrainTimeout(t: ActiveTurn): void {
+    const waitMs = Math.round(t.speaker.busyForMs() + 10_000)
+    const timer = setTimeout(() => {
+      if (this.turn !== t || t.drained) return
+      this.tr('turn.drain_timeout', { waitMs, chunksStarted: t.startedSeqs.size, chunksFinished: t.finishedSeqs.size })
+      this.deps.log(`turn ${t.id}: playback never drained after ${waitMs} ms; finishing anyway`)
+      this.finishTurn(t)
+    }, waitMs)
+    timer.unref?.()
   }
 
   private finishTurn(t: ActiveTurn): void {

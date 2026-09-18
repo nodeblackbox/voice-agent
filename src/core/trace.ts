@@ -2,15 +2,9 @@
 // matters for reconstructing a turn goes through here; per-frame data (VAD levels) never does.
 // docs/DEBUGGING.md lists the vocabulary.
 
-export interface TraceEvent {
-  /** Dotted event name: state, ear.final, turn.start, tts.sentence, playback.started, sidecar.ready … */
-  ev: string
-  /** Session the event belongs to; omitted for process-level events, which land in the current session. */
-  sid?: string
-  turn?: string
-  t?: string
-  [key: string]: unknown
-}
+import type { TraceEvent } from '@shared/types'
+
+export type { TraceEvent }
 
 export type Trace = (event: TraceEvent) => void
 
