@@ -21,6 +21,7 @@ export function ChatHeader() {
   const muted = useStore((s) => s.muted)
   const setMuted = useStore((s) => s.setMuted)
   const agentState = useStore((s) => s.agentState)
+  const micMuted = useStore((s) => s.micMuted)
   const services = useStore((s) => s.services)
   const lastMetrics = useStore((s) => s.lastMetrics)
   const messages = useStore((s) => s.messages)
@@ -51,7 +52,7 @@ export function ChatHeader() {
         )}
       </div>
       <div className="flex items-center gap-1 shrink-0">
-        <StateIndicator state={agentState} toolLabel={toolLabel} toolSummary={toolSummary} services={services} />
+        <StateIndicator state={agentState} toolLabel={toolLabel} toolSummary={toolSummary} services={services} micMuted={micMuted} />
         <span className="text-xs ml-2 mr-1 inline-flex items-center gap-1.5" style={{ color: T.text3 }}>
           <Headphones size={12} />
           {friendlyVoice(settings?.voice.voice)}
@@ -66,7 +67,7 @@ export function ChatHeader() {
             {formatTokens(tokens.inputTokens ?? 0)}/{formatTokens(tokens.outputTokens ?? 0)}
           </span>
         )}
-        <IconBtn icon={muted ? VolumeX : Volume2} label={muted ? 'Unmute' : 'Mute'} onClick={() => setMuted(!muted)} size={15} color={muted ? T.amber : undefined} />
+        <IconBtn icon={muted ? VolumeX : Volume2} label={muted ? 'Unmute her voice' : 'Mute her voice'} onClick={() => setMuted(!muted)} size={15} color={muted ? T.amber : undefined} />
         <IconBtn icon={PanelRight} label="Quick panel" active={rightOpen} onClick={() => setRightOpen(!rightOpen)} size={15} />
       </div>
     </header>

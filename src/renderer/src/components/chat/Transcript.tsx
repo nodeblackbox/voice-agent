@@ -3,7 +3,7 @@ import { Brain, Check, Copy, Keyboard, Mic, Play, Scissors, Square, Volume2, Zap
 import type { ChatMessage, UserTiming } from '@shared/types'
 import { T } from '../../theme'
 import { useStore } from '../../state/store'
-import { Bars } from '../primitives'
+import { VoiceBars } from '../VoiceBars'
 import { ToolPill } from './ToolPill'
 import { formatTokens } from '../../lib/format'
 import { splitBySentences, splitInterrupted } from '../../lib/spoken'
@@ -192,7 +192,7 @@ const AssistantBubble = memo(function AssistantBubble({
           className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs"
           style={{ color: speaking ? T.cyan : T.text3, background: 'transparent', border: 'none', cursor: 'pointer' }}
         >
-          {speaking ? <Bars color={T.cyan} h={12} /> : <Volume2 size={13} />}
+          {speaking ? <VoiceBars source="output" color={T.cyan} h={12} /> : <Volume2 size={13} />}
           {speaking && <span>tap to stop</span>}
         </button>
         <button
@@ -346,13 +346,13 @@ export function Transcript() {
         <MemoryConfirmChip />
         {agentState === 'user_speaking' && (
           <div className="self-center inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs va-fade" style={{ background: T.cyanTint, color: T.cyan, maxWidth: '80%' }}>
-            <Bars color={T.cyan} h={10} n={4} />
+            <VoiceBars source="mic" color={T.cyan} h={10} n={4} />
             <span className="truncate">{partial || 'Listening'}</span>
           </div>
         )}
         {agentState === 'listening' && listening && messages.length > 0 && (
           <div className="self-center inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs" style={{ color: T.text3 }}>
-            <Bars color={T.text3} h={8} n={3} />
+            <VoiceBars source="mic" color={T.text3} h={8} n={3} />
             <span>Listening</span>
           </div>
         )}

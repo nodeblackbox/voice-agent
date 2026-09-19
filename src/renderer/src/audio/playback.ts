@@ -28,6 +28,7 @@ let rampS = DEFAULT_TUNING.playback.duckRampMs / 1000
 
 let ctx: SinkCapableContext | null = null
 let master: GainNode | null = null
+let analyser: AnalyserNode | null = null
 let muted = false
 let duck = 1
 const turns = new Map<string, TurnQueue>()
@@ -61,8 +62,14 @@ function ensure(): SinkCapableContext {
   const g = c.createGain()
   g.gain.value = muted ? 0 : duck
   g.connect(c.destination)
+  // taps what is actually heard (after ducking/mute) for the level-reactive animation
+  const an = c.createAnalyser()
+  an.fftSize = 512
+  an.smoothingTimeConstant = 0.5
+  g.connect(an)
   ctx = c
   master = g
+  analyser = an
   return c
 }
 
@@ -222,6 +229,10 @@ export const playback = {
   master(): GainNode {
     ensure()
     return master as GainNode
+  },
+  /** Frequency data of the voice being played; null until the first sound (never creates a context). */
+  currentAnalyser(): AnalyserNode | null {
+    return analyser
   },
   subscribe(): () => void {
     if (unsubscribed) return () => undefined

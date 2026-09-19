@@ -1,10 +1,11 @@
 import { useState, type KeyboardEvent } from 'react'
-import { AlignLeft, ChevronDown, Folder, Lock, MessageSquare, Mic, Send, Sparkles, Wand2 } from 'lucide-react'
+import { AlignLeft, ChevronDown, Folder, Lock, MessageSquare, Mic, MicOff, Send, Sparkles, Wand2 } from 'lucide-react'
 import type { Mode } from '@shared/types'
 import { T } from '../../theme'
 import { selectActiveModel, selectActiveProject, selectActiveStyle, useStore } from '../../state/store'
-import { toggleListening } from '../../audio/voice'
-import { Bars, Dropdown, MenuItem } from '../primitives'
+import { toggleListening, toggleMicMuted } from '../../audio/voice'
+import { Dropdown, MenuItem } from '../primitives'
+import { VoiceBars } from '../VoiceBars'
 
 const MODES: Array<{ id: Mode; label: string; desc: string }> = [
   { id: 'ask', label: 'Ask', desc: 'Single reply, tools only if needed' },
@@ -21,6 +22,7 @@ export function InputBar() {
   const style = useStore(selectActiveStyle)
   const project = useStore(selectActiveProject)
   const listening = useStore((s) => s.listening)
+  const micMuted = useStore((s) => s.micMuted)
   const agentState = useStore((s) => s.agentState)
   const updateSettings = useStore((s) => s.updateSettings)
   const setView = useStore((s) => s.setView)
@@ -168,20 +170,37 @@ export function InputBar() {
               <button
                 aria-label={listening ? 'Stop listening' : 'Start voice'}
                 onClick={() => void toggleListening()}
-                className={`inline-flex items-center justify-center gap-2 rounded-lg text-xs ${listening ? 'va-ring' : ''}`}
+                className={`inline-flex items-center justify-center gap-2 rounded-lg text-xs ${listening && !micMuted ? 'va-ring' : ''}`}
                 style={{
                   height: 32,
                   minWidth: listening ? 96 : 76,
                   padding: '0 12px',
-                  color: listening ? T.cyan : T.text,
-                  background: listening ? T.cyanTint : T.surface,
-                  border: `1px solid ${listening ? T.cyan : T.border}`,
+                  color: listening ? (micMuted ? T.amber : T.cyan) : T.text,
+                  background: listening ? (micMuted ? T.amberTint : T.cyanTint) : T.surface,
+                  border: `1px solid ${listening ? (micMuted ? T.amber : T.cyan) : T.border}`,
                   cursor: 'pointer',
                   transition: 'all .2s ease'
                 }}
               >
-                {listening ? <Bars color={T.cyan} h={12} /> : <Mic size={13} />}
-                <span>{listening ? 'Live' : 'Voice'}</span>
+                {listening ? micMuted ? <MicOff size={13} /> : <VoiceBars source="mic" color={T.cyan} h={12} /> : <Mic size={13} />}
+                <span>{listening ? (micMuted ? 'Muted' : 'Live') : 'Voice'}</span>
+              </button>
+              <button
+                aria-label={micMuted ? 'Unmute microphone' : 'Mute microphone'}
+                title={micMuted ? 'Unmute the microphone' : 'Mute the microphone: voice stays on, but she stops hearing you'}
+                onClick={toggleMicMuted}
+                className="flex items-center justify-center rounded-lg"
+                style={{
+                  width: 32,
+                  height: 32,
+                  color: micMuted ? T.amber : T.text2,
+                  background: micMuted ? T.amberTint : T.surface,
+                  border: `1px solid ${micMuted ? T.amber : T.border}`,
+                  cursor: 'pointer',
+                  transition: 'all .2s ease'
+                }}
+              >
+                {micMuted ? <MicOff size={13} /> : <Mic size={13} />}
               </button>
               <button
                 aria-label="Send"

@@ -9,6 +9,7 @@ export async function startListening(): Promise<void> {
   try {
     const deviceId = useStore.getState().settings?.audio.inputDeviceId
     await capture.start(deviceId)
+    capture.setMuted(useStore.getState().micMuted)
     await window.api.voice.start()
     useStore.getState().setListening(true)
   } catch (err) {
@@ -33,4 +34,15 @@ export async function stopListening(): Promise<void> {
 
 export function toggleListening(): Promise<void> {
   return useStore.getState().listening ? stopListening() : startListening()
+}
+
+/** Mute the microphone without leaving voice mode: the stream stays open, the ears hear silence. */
+export function setMicMuted(v: boolean): void {
+  capture.setMuted(v)
+  useStore.getState().setMicMuted(v)
+  window.api.log.write('info', 'voice', v ? 'mic muted' : 'mic unmuted')
+}
+
+export function toggleMicMuted(): void {
+  setMicMuted(!useStore.getState().micMuted)
 }

@@ -71,7 +71,10 @@ interface Store {
   keys: KeyStatus[]
   lastMetrics: TurnMetrics | null
   listening: boolean
+  /** Speaker mute (the voice is silenced). */
   muted: boolean
+  /** Microphone mute: voice mode stays on but the ears receive silence. */
+  micMuted: boolean
   memoryVersion: number
   mcpVersion: number
   /** The sentence being played right now, for the live highlight in the transcript. */
@@ -98,6 +101,7 @@ interface Store {
   pushToast(kind: Toast['kind'], text: string): void
   setListening(v: boolean): void
   setMuted(v: boolean): void
+  setMicMuted(v: boolean): void
 }
 
 let initialised = false
@@ -128,6 +132,7 @@ export const useStore = create<Store>((set, get) => ({
   lastMetrics: null,
   listening: false,
   muted: readBool(MUTED_KEY, false),
+  micMuted: false,
   memoryVersion: 0,
   mcpVersion: 0,
   speaking: null,
@@ -354,6 +359,7 @@ export const useStore = create<Store>((set, get) => ({
   },
 
   setListening: (v) => set({ listening: v }),
+  setMicMuted: (v) => set({ micMuted: v }),
   setMuted: (v) => {
     writeBool(MUTED_KEY, v)
     playback.setMuted(v)

@@ -1,21 +1,22 @@
 import { Loader2 } from 'lucide-react'
 import type { AgentState, ServiceStatus } from '@shared/types'
 import { T } from '../../theme'
-import { Bars, Dot } from '../primitives'
+import { Dot } from '../primitives'
+import { VoiceBars } from '../VoiceBars'
 import { truncate } from '../../lib/format'
 
-function describe(state: AgentState, toolLabel: string | null): { text: string; color: string; kind: 'bars' | 'pulse' | 'spin' | 'dot' } {
+function describe(state: AgentState, toolLabel: string | null, micMuted: boolean): { text: string; color: string; kind: 'mic' | 'output' | 'pulse' | 'spin' | 'dot' } {
   switch (state) {
     case 'listening':
-      return { text: 'Listening', color: T.cyan, kind: 'bars' }
+      return micMuted ? { text: 'Mic muted', color: T.amber, kind: 'dot' } : { text: 'Listening', color: T.cyan, kind: 'mic' }
     case 'user_speaking':
-      return { text: 'Hearing you', color: T.cyan, kind: 'bars' }
+      return { text: 'Hearing you', color: T.cyan, kind: 'mic' }
     case 'thinking':
       return { text: 'Thinking', color: T.violet, kind: 'pulse' }
     case 'tool':
       return { text: toolLabel ?? 'Working', color: T.violet, kind: 'spin' }
     case 'speaking':
-      return { text: 'Speaking', color: T.cyan, kind: 'bars' }
+      return { text: 'Speaking', color: T.cyan, kind: 'output' }
     case 'interrupted':
       return { text: 'Interrupted', color: T.amber, kind: 'dot' }
     default:
@@ -27,12 +28,14 @@ export function StateIndicator({
   state,
   toolLabel,
   toolSummary,
-  services
+  services,
+  micMuted = false
 }: {
   state: AgentState
   toolLabel: string | null
   toolSummary?: string | null
   services: Partial<Record<string, ServiceStatus>>
+  micMuted?: boolean
 }) {
   const warming = Object.values(services).find((s) => s && (s.state === 'starting' || s.state === 'reconnecting'))
   if (warming && (state === 'idle' || state === 'listening')) {
@@ -44,11 +47,11 @@ export function StateIndicator({
       </span>
     )
   }
-  const d = describe(state, toolLabel)
+  const d = describe(state, toolLabel, micMuted)
   const tint = state === 'idle' ? 'transparent' : `${d.color}1A`
   return (
     <span className="inline-flex items-center gap-2 rounded-full px-2.5 py-1 text-xs" style={{ background: tint, color: d.color, maxWidth: 360 }}>
-      {d.kind === 'bars' && <Bars color={d.color} h={10} n={4} />}
+      {(d.kind === 'mic' || d.kind === 'output') && <VoiceBars source={d.kind} color={d.color} h={10} n={4} />}
       {d.kind === 'pulse' && <Dot color={d.color} pulse />}
       {d.kind === 'spin' && <Loader2 size={12} className="va-spin" />}
       {d.kind === 'dot' && <Dot color={d.color} />}

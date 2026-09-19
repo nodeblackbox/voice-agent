@@ -4,7 +4,10 @@ import { rlog } from '../lib/rlog'
 let ctx: AudioContext | null = null
 let stream: MediaStream | null = null
 let node: AudioWorkletNode | null = null
+let analyser: AnalyserNode | null = null
 let starting: Promise<void> | null = null
+/** Mic mute: the ears keep receiving frames (their clock is frame-driven) but every sample is zero. */
+let muted = false
 
 export class CaptureError extends Error {
   constructor(
@@ -64,12 +67,18 @@ export const capture = {
       }
       const source = c.createMediaStreamSource(media)
       const worklet = new AudioWorkletNode(c, CAPTURE_PROCESSOR_NAME, { numberOfInputs: 1, numberOfOutputs: 0, channelCount: 1 })
-      worklet.port.onmessage = (e: MessageEvent<ArrayBuffer>) => window.api.voice.sendFrame(e.data)
+      worklet.port.onmessage = (e: MessageEvent<ArrayBuffer>) => window.api.voice.sendFrame(muted ? new ArrayBuffer(e.data.byteLength) : e.data)
       source.connect(worklet)
+      // taps the mic for the level-reactive animation; nothing downstream
+      const an = c.createAnalyser()
+      an.fftSize = 512
+      an.smoothingTimeConstant = 0.5
+      source.connect(an)
       if (c.state === 'suspended') await c.resume()
       ctx = c
       stream = media
       node = worklet
+      analyser = an
       const track = media.getAudioTracks()[0]
       const s = track?.getSettings() ?? {}
       rlog('info', 'capture', `mic open: ${track?.label ?? 'unknown'} rate=${c.sampleRate} aec=${String(s.echoCancellation)} ns=${String(s.noiseSuppression)} agc=${String(s.autoGainControl)}`)
@@ -85,6 +94,8 @@ export const capture = {
     node?.port.close()
     node?.disconnect()
     node = null
+    analyser?.disconnect()
+    analyser = null
     stream?.getTracks().forEach((t) => t.stop())
     stream = null
     const c = ctx
@@ -94,6 +105,20 @@ export const capture = {
 
   get sampleRate(): number | null {
     return ctx?.sampleRate ?? null
+  },
+
+  /** Frequency data of the open microphone, for the animation; null while the mic is closed. */
+  get analyser(): AnalyserNode | null {
+    return analyser
+  },
+
+  /** While muted the stream stays open and the ears receive silence. */
+  setMuted(v: boolean): void {
+    muted = v
+  },
+
+  get muted(): boolean {
+    return muted
   },
 
   get deviceLabel(): string | null {
