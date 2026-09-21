@@ -1,5 +1,5 @@
 import { useState, type KeyboardEvent } from 'react'
-import { AlignLeft, ChevronDown, Folder, Lock, MessageSquare, Mic, MicOff, Send, Sparkles, Wand2 } from 'lucide-react'
+import { AlignLeft, ChevronDown, Folder, Headphones, HeadphoneOff, Lock, MessageSquare, Mic, MicOff, Send, Sparkles, Wand2, type LucideIcon } from 'lucide-react'
 import type { Mode } from '@shared/types'
 import { T } from '../../theme'
 import { selectActiveModel, selectActiveProject, selectActiveStyle, useStore } from '../../state/store'
@@ -14,6 +14,37 @@ const MODES: Array<{ id: Mode; label: string; desc: string }> = [
 
 type Menu = 'mode' | 'model' | 'style' | null
 
+/**
+ * Discord-style voice controls: small round pills above the input, on the right, only while voice
+ * mode is on. Mute (red when active) stops her hearing you; Deafen (blue when active) stops you
+ * hearing her. Kept out of the input field so the Voice button stays the one obvious voice switch.
+ */
+function VoicePill({ icon: Icon, activeIcon: ActiveIcon, label, activeLabel, active, color, tint, title, onClick }: { icon: LucideIcon; activeIcon: LucideIcon; label: string; activeLabel: string; active: boolean; color: string; tint: string; title: string; onClick: () => void }) {
+  const I = active ? ActiveIcon : Icon
+  return (
+    <button
+      aria-label={title}
+      aria-pressed={active}
+      title={title}
+      onClick={onClick}
+      className="inline-flex items-center gap-1.5 rounded-full text-xs"
+      style={{
+        height: 24,
+        padding: '0 10px 0 8px',
+        color: active ? color : T.text2,
+        background: active ? tint : 'transparent',
+        border: `1px solid ${active ? color : T.border}`,
+        boxShadow: active ? `0 0 0 3px ${tint}` : 'none',
+        cursor: 'pointer',
+        transition: 'all .15s ease'
+      }}
+    >
+      <I size={12} />
+      <span style={{ fontWeight: active ? 600 : 400 }}>{active ? activeLabel : label}</span>
+    </button>
+  )
+}
+
 export function InputBar() {
   const settings = useStore((s) => s.settings)
   const models = useStore((s) => s.models)
@@ -23,6 +54,8 @@ export function InputBar() {
   const project = useStore(selectActiveProject)
   const listening = useStore((s) => s.listening)
   const micMuted = useStore((s) => s.micMuted)
+  const deafened = useStore((s) => s.muted)
+  const setDeafened = useStore((s) => s.setMuted)
   const agentState = useStore((s) => s.agentState)
   const updateSettings = useStore((s) => s.updateSettings)
   const setView = useStore((s) => s.setView)
@@ -78,6 +111,32 @@ export function InputBar() {
           <span className="text-xs" style={{ color: T.text3 }}>
             {project ? 'memory scoped to this project' : 'global memory only'}
           </span>
+          {listening && (
+            <div className="ml-auto flex items-center gap-1.5 va-fade">
+              <VoicePill
+                icon={Mic}
+                activeIcon={MicOff}
+                label="Mute"
+                activeLabel="Muted"
+                active={micMuted}
+                color={T.red}
+                tint={T.redTint}
+                title={micMuted ? 'Unmute: let her hear you again' : 'Mute: she stops hearing you (voice mode stays on)'}
+                onClick={toggleMicMuted}
+              />
+              <VoicePill
+                icon={Headphones}
+                activeIcon={HeadphoneOff}
+                label="Deafen"
+                activeLabel="Deafened"
+                active={deafened}
+                color={T.cyan}
+                tint={T.cyanTint}
+                title={deafened ? 'Undeafen: hear her again' : 'Deafen: you stop hearing her (replies still show in the transcript)'}
+                onClick={() => setDeafened(!deafened)}
+              />
+            </div>
+          )}
         </div>
         <div
           className="rounded-2xl shadow-2xl"
@@ -175,32 +234,15 @@ export function InputBar() {
                   height: 32,
                   minWidth: listening ? 96 : 76,
                   padding: '0 12px',
-                  color: listening ? (micMuted ? T.amber : T.cyan) : T.text,
-                  background: listening ? (micMuted ? T.amberTint : T.cyanTint) : T.surface,
-                  border: `1px solid ${listening ? (micMuted ? T.amber : T.cyan) : T.border}`,
+                  color: listening ? (micMuted ? T.red : T.cyan) : T.text,
+                  background: listening ? (micMuted ? T.redTint : T.cyanTint) : T.surface,
+                  border: `1px solid ${listening ? (micMuted ? T.red : T.cyan) : T.border}`,
                   cursor: 'pointer',
                   transition: 'all .2s ease'
                 }}
               >
                 {listening ? micMuted ? <MicOff size={13} /> : <VoiceBars source="mic" color={T.cyan} h={12} /> : <Mic size={13} />}
                 <span>{listening ? (micMuted ? 'Muted' : 'Live') : 'Voice'}</span>
-              </button>
-              <button
-                aria-label={micMuted ? 'Unmute microphone' : 'Mute microphone'}
-                title={micMuted ? 'Unmute the microphone' : 'Mute the microphone: voice stays on, but she stops hearing you'}
-                onClick={toggleMicMuted}
-                className="flex items-center justify-center rounded-lg"
-                style={{
-                  width: 32,
-                  height: 32,
-                  color: micMuted ? T.amber : T.text2,
-                  background: micMuted ? T.amberTint : T.surface,
-                  border: `1px solid ${micMuted ? T.amber : T.border}`,
-                  cursor: 'pointer',
-                  transition: 'all .2s ease'
-                }}
-              >
-                {micMuted ? <MicOff size={13} /> : <Mic size={13} />}
               </button>
               <button
                 aria-label="Send"

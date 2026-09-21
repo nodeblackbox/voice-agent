@@ -20,7 +20,10 @@ export function VoiceBars({ source, color, h = 14, n = 5 }: { source: 'mic' | 'o
     const MIN = 0.18
     const tick = (t: number): void => {
       const an = source === 'mic' ? capture.analyser : playback.currentAnalyser()
-      if (an) {
+      if (source === 'mic' && capture.muted) {
+        // muted: the ears get silence, so the bars show silence too
+        for (let i = 0; i < n; i++) levels[i] = levels[i]! * 0.8
+      } else if (an) {
         if (!buf || buf.length !== an.frequencyBinCount) buf = new Uint8Array(an.frequencyBinCount)
         an.getByteFrequencyData(buf)
         const hz = an.context.sampleRate / an.fftSize

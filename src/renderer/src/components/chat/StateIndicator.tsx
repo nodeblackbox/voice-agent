@@ -8,7 +8,7 @@ import { truncate } from '../../lib/format'
 function describe(state: AgentState, toolLabel: string | null, micMuted: boolean): { text: string; color: string; kind: 'mic' | 'output' | 'pulse' | 'spin' | 'dot' } {
   switch (state) {
     case 'listening':
-      return micMuted ? { text: 'Mic muted', color: T.amber, kind: 'dot' } : { text: 'Listening', color: T.cyan, kind: 'mic' }
+      return micMuted ? { text: 'Muted', color: T.red, kind: 'dot' } : { text: 'Listening', color: T.cyan, kind: 'mic' }
     case 'user_speaking':
       return { text: 'Hearing you', color: T.cyan, kind: 'mic' }
     case 'thinking':
