@@ -9,6 +9,7 @@ import { TurnRunner, type RunnerDeps } from './runner'
 import { Speaker } from '../speech/speaker'
 import { CONTINUATION, STEP_LIMIT_PHRASE } from '../speech/fillers'
 import type { ModelFactory } from '../providers/factory'
+import { GroqKeyPool } from '../providers/keys'
 import { findModel } from '../providers/models'
 
 const usage = (input: number, output: number) => ({
@@ -60,7 +61,7 @@ function harness(models: Record<string, MockLanguageModelV4>, over: Partial<Runn
     {
       engine: { name: 'edge', synth: async (req) => Buffer.from(req.text) },
       fallback: { name: 'system', synth: async () => null },
-      voice: { engine: 'edge', voice: 'v', rate: 1, pitch: 0 },
+      voice: { engine: 'edge', voice: 'v', kokoroVoice: 'af_heart', rate: 1, pitch: 0 },
       emit: (c) => chunks.push(c),
       onDegraded: () => undefined,
       log: () => undefined
@@ -167,12 +168,37 @@ describe('TurnRunner', () => {
     expect(vi.mocked(h.deps.onMetrics).mock.calls[0]![0]).toMatchObject({ fallbackUsed: true })
   })
 
-  it('does not retry non-transient errors', async () => {
-    const forbidden = Object.assign(new Error('bad key'), { statusCode: 401 })
-    const h = harness({ 'anthropic:claude-haiku-4-5': mockModel([forbidden, textStream(['nope'])]), 'groq:openai/gpt-oss-20b': mockModel([textStream(['nope'])]) })
+  it('does not retry non-transient, non-auth errors', async () => {
+    const malformed = Object.assign(new Error('bad request'), { statusCode: 400 })
+    const h = harness({ 'anthropic:claude-haiku-4-5': mockModel([malformed, textStream(['nope'])]), 'groq:openai/gpt-oss-20b': mockModel([textStream(['nope'])]) })
     const r = await h.run()
     expect(r.text).toBe('')
-    expect(r.error).toContain('401')
+    expect(r.error).toContain('400')
+  })
+
+  it('skips straight to the fallback model on an invalid API key, without a wasted same-model retry', async () => {
+    const forbidden = Object.assign(new Error('invalid x-api-key'), { statusCode: 401 })
+    const primary = mockModel([forbidden, textStream(['should not be reached'])])
+    const h = harness({ 'anthropic:claude-haiku-4-5': primary, 'groq:openai/gpt-oss-20b': mockModel([textStream(['Fallback.'])]) })
+    const r = await h.run()
+    expect(r.text).toBe('Fallback.')
+    expect(r.modelUsed).toBe('groq:openai/gpt-oss-20b')
+    expect(h.deps.onNotice).toHaveBeenCalledWith(expect.stringContaining("isn't responding"))
+  })
+
+  it('rotates past a dead key in the Groq pool instead of failing the turn', async () => {
+    const forbidden = (msg: string) => Object.assign(new Error(msg), { statusCode: 401 })
+    const pool = new GroqKeyPool({ keysFor: () => ['dead', 'live'] })
+    const models: Record<string, MockLanguageModelV4> = {
+      'anthropic:claude-haiku-4-5': mockModel([forbidden('invalid x-api-key')]),
+      'groq:openai/gpt-oss-20b': mockModel([forbidden('Invalid API Key'), textStream(['Groq here.'])])
+    }
+    const factory = { create: (m: ModelInfo) => ({ model: models[m.id]!, key: m.provider === 'groq' ? pool.pick()! : 'k' }), groqPool: pool } as unknown as ModelFactory
+    const h = harness(models, { factory })
+    const r = await h.run()
+    expect(r.text).toBe('Groq here.')
+    expect(r.modelUsed).toBe('groq:openai/gpt-oss-20b')
+    expect(h.deps.onNotice).toHaveBeenCalledTimes(1)
   })
 
   it('returns aborted when the outer signal fires', async () => {
@@ -247,7 +273,7 @@ describe('TurnRunner', () => {
     const silent = new MockLanguageModelV4({
       doStream: (opts) => new Promise((_resolve, reject) => opts.abortSignal?.addEventListener('abort', () => reject(new Error('aborted by client'))))
     })
-    const h = harness({ 'anthropic:claude-haiku-4-5': silent, 'groq:openai/gpt-oss-20b': mockModel([textStream(['Late.'])]) }, { firstTokenTimeoutMs: 50 })
+    const h = harness({ 'anthropic:claude-haiku-4-5': silent, 'groq:openai/gpt-oss-20b': mockModel([textStream(['Late.'])]) }, { firstTokenTimeoutMs: 300 })
     const r = await h.run()
     expect(r.text).toBe('Late.')
   }, 10_000)

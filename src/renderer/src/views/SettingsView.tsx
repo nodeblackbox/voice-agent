@@ -77,12 +77,29 @@ function VoiceOutput() {
     <Section icon={Headphones} title="Voice output">
       <Card pad={0}>
         <div className="px-4">
-          <Row label="Engine" sub="Edge TTS, streamed sentence by sentence. Falls back to the Windows voice if Edge is unreachable.">
+          <Row label="Engine" sub="Edge TTS, streamed sentence by sentence. If Edge is unreachable it switches to the local Kokoro voice (the Windows voice covers while Kokoro loads).">
             <span className="inline-flex items-center gap-2 text-xs" style={{ color: T.text2 }}>
               <Dot color={serviceColor(tts?.state)} />
-              <span style={{ fontFamily: T.mono }}>{v.engine === 'edge' ? 'edge-tts' : 'system'}</span>
               <span style={{ color: T.text3 }}>{tts?.detail ?? serviceLabel(tts?.state)}</span>
+              <Select
+                value={v.engine}
+                width={130}
+                onChange={(engine) => void updateSettings({ voice: { ...v, engine: engine as typeof v.engine } })}
+                options={[
+                  { id: 'edge', label: 'Edge TTS' },
+                  { id: 'kokoro', label: 'Kokoro (local)' },
+                  { id: 'system', label: 'Windows voice' }
+                ]}
+              />
             </span>
+          </Row>
+          <Row label="Kokoro voice" sub="Local voice used as the contingency (or as the engine). af_ = American female, am_ = male, bf_/bm_ = British.">
+            <Select
+              value={v.kokoroVoice}
+              width={130}
+              onChange={(kokoroVoice) => void updateSettings({ voice: { ...v, kokoroVoice } })}
+              options={['af_heart', 'af_bella', 'af_nicole', 'am_michael', 'am_fenrir', 'bf_emma', 'bm_george'].map((id) => ({ id, label: id }))}
+            />
           </Row>
           <Row label="Rate" sub={`${v.rate > 0 ? '+' : ''}${Math.round(v.rate * 100)}%`}>
             <input type="range" min={-0.5} max={0.5} step={0.05} value={v.rate} onChange={(e) => void updateSettings({ voice: { ...v, rate: Number(e.target.value) } })} />

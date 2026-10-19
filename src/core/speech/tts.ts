@@ -34,7 +34,7 @@ export interface TtsRequest {
 
 // Returns MP3 bytes, or null when the renderer should speak the text itself (system voice).
 export interface TtsEngine {
-  readonly name: 'edge' | 'system'
+  readonly name: 'edge' | 'system' | 'kokoro'
   synth(req: TtsRequest, signal: AbortSignal): Promise<Buffer | null>
 }
 
@@ -47,6 +47,47 @@ export class SystemTtsEngine implements TtsEngine {
 
 const abortError = (): Error => Object.assign(new Error('aborted'), { name: 'AbortError' })
 export const isAbort = (e: unknown): boolean => e instanceof Error && e.name === 'AbortError'
+
+/** The local Kokoro process, owned by the main process. */
+export interface KokoroBackend {
+  ready(): boolean
+  start(): Promise<boolean>
+  synth(text: string, voice: string, speed: number, signal: AbortSignal): Promise<Buffer>
+}
+
+// `voice.rate` is Edge's prosody value: around 1 it is a multiplier, the Settings slider stores a
+// relative offset (-0.5..0.5). Map both onto Kokoro's speed multiplier.
+export const kokoroSpeed = (rate: number): number => Math.min(2, Math.max(0.5, rate >= 0.5 ? rate : 1 + rate))
+
+// Last-resort local voice. Never throws for engine trouble: while Kokoro is loading or broken it
+// returns null, which the renderer speaks with the Windows voice.
+export class KokoroTtsEngine implements TtsEngine {
+  readonly name = 'kokoro'
+
+  constructor(
+    private readonly backend: KokoroBackend,
+    private readonly voice: () => string,
+    private readonly log: (msg: string) => void = () => undefined
+  ) {}
+
+  async synth(req: TtsRequest, signal: AbortSignal): Promise<Buffer | null> {
+    if (signal.aborted) throw abortError()
+    if (!this.backend.ready()) {
+      void this.backend.start()
+      return null
+    }
+    const t0 = performance.now()
+    try {
+      const buf = await this.backend.synth(req.text, this.voice(), kokoroSpeed(req.rate), signal)
+      req.onFirstByte?.(performance.now() - t0)
+      return buf
+    } catch (e) {
+      if (signal.aborted) throw abortError()
+      this.log(`kokoro synth failed: ${(e as Error).message}`)
+      return null
+    }
+  }
+}
 
 const escapeXml = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;')

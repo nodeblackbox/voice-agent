@@ -18,3 +18,6 @@ torchaudio==2.6.0+cu124
 huggingface_hub==1.29.0
 websockets==16.1.1
 soundfile==0.14.0
+# `mouth`: Kokoro-82M, the local voice the app starts on demand when Edge TTS is unreachable
+kokoro==0.9.4
+misaki==0.9.4

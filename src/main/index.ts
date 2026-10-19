@@ -11,6 +11,7 @@ import { initLog, log, logAt, logError, trace, tracePath, type LogLevel } from '
 import { SettingsService } from './services/settings'
 import { SidecarService } from './services/sidecar'
 import { SearxngService } from './services/searxng'
+import { KokoroService } from './services/kokoro'
 import { McpService } from './services/mcp'
 import { registerIpc } from './ipc/register'
 
@@ -171,6 +172,7 @@ app.whenReady().then(async () => {
   })
 
   const searxng = new SearxngService({ projectRoot, url: () => settings.get().searxng.url, onStatus })
+  const kokoro = new KokoroService({ projectRoot, python: () => sidecar.resolvePython(), voice: () => settings.get().voice.kokoroVoice })
   const mcp = new McpService({
     projectRoot,
     userData,
@@ -188,6 +190,7 @@ app.whenReady().then(async () => {
     mcp,
     search: { baseUrl: () => searxng.baseUrl(), ensure: () => searxng.ensure(), configured: () => searxng.configured() },
     ears: { agentSpeaking: (on) => sidecar.agentSpeaking(on), agentThinking: (on) => sidecar.agentThinking(on) },
+    kokoro,
     emit,
     emitAudio: (chunk: AudioChunk) => send(IPC.audioChunk, chunk),
     cancelAudio: (turnId) => send(IPC.audioCancel, turnId),
@@ -200,7 +203,11 @@ app.whenReady().then(async () => {
     const hasKey = model ? settings.keysFor(model.provider).length > 0 : false
     return [
       sidecar.status,
-      { name: 'tts', state: settings.get().voice.engine === 'edge' ? 'ready' : 'off', detail: settings.get().voice.voice },
+      {
+        name: 'tts',
+        state: settings.get().voice.engine === 'system' ? 'off' : 'ready',
+        detail: `${settings.get().voice.engine === 'kokoro' ? settings.get().voice.kokoroVoice : settings.get().voice.voice}${kokoro.ready() ? ' · Kokoro loaded' : ''}`
+      },
       { name: 'llm', state: hasKey ? 'ready' : 'error', detail: hasKey ? model?.label : `no API key for ${model?.providerLabel ?? 'model'}` },
       searxng.status,
       mcp.status
@@ -304,6 +311,7 @@ app.whenReady().then(async () => {
     // VA_TRACE=1: print where this session's trace landed so scripted runs can pick it up
     if (process.env.VA_TRACE) console.log(`VA_TRACE ${tracePath() ?? 'none'}`)
     sidecar.stop()
+    kokoro.stop()
     searxng.stop()
     void mcp.stop()
     store.close()

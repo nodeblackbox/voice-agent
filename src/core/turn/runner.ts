@@ -49,6 +49,13 @@ const isTransient = (e: unknown): boolean => {
   const msg = String((e as Error)?.message ?? e).toLowerCase()
   return /timeout|timed out|econnreset|fetch failed|network|socket|overloaded|stall/.test(msg)
 }
+// a bad or revoked key for the provider itself, not a transient outage: retrying the same model is pointless, go straight to fallback
+const isAuthError = (e: unknown): boolean => {
+  const s = status(e)
+  if (s === 401 || s === 403) return true
+  const msg = String((e as Error)?.message ?? e).toLowerCase()
+  return /invalid x-api-key|invalid api key|authentication_error|unauthorized/.test(msg)
+}
 const describe = (e: unknown): string => {
   if (e instanceof MissingKeyError) return e.message
   const s = status(e)
@@ -84,11 +91,16 @@ export class TurnRunner {
     if (this.deps.fallback && this.deps.fallback.id !== this.deps.model.id) attempts.push({ model: this.deps.fallback, reason: 'fallback' })
 
     let lastError: unknown
-    for (const attempt of attempts) {
+    let rotatingKey = false
+    for (let i = 0; i < attempts.length; i++) {
+      const attempt = attempts[i]!
       if (signal.aborted) return { text: this.text, aborted: true, modelUsed: attempt.model.id }
-      if (attempt.reason === 'retry' && this.deps.brain.retryBackoffMs > 0) await sleep(this.deps.brain.retryBackoffMs, signal)
-      if (signal.aborted) return { text: this.text, aborted: true, modelUsed: attempt.model.id }
-      if (attempt.reason === 'fallback') this.deps.onNotice(`${this.deps.model.label} isn't responding, trying ${attempt.model.label}.`)
+      if (!rotatingKey) {
+        if (attempt.reason === 'retry' && this.deps.brain.retryBackoffMs > 0) await sleep(this.deps.brain.retryBackoffMs, signal)
+        if (signal.aborted) return { text: this.text, aborted: true, modelUsed: attempt.model.id }
+        if (attempt.reason === 'fallback') this.deps.onNotice(`${this.deps.model.label} isn't responding, trying ${attempt.model.label}.`)
+      }
+      rotatingKey = false
       if (attempt.reason !== 'primary') this.deps.trace?.('turn.attempt', { reason: attempt.reason, model: attempt.model.id })
       try {
         const outcome = await this.attempt(attempt.model, signal)
@@ -99,8 +111,19 @@ export class TurnRunner {
         this.deps.log(`turn attempt (${attempt.reason}, ${attempt.model.id}) failed: ${describe(e)}`)
         this.deps.trace?.('turn.attempt_failed', { reason: attempt.reason, model: attempt.model.id, error: describe(e), transient: isTransient(e) })
         if (this.text.length > 0) break
-        if (e instanceof MissingKeyError) {
-          if (attempt.reason !== 'fallback' && this.deps.fallback) continue
+        // one dead key in the Groq pool shouldn't sink the turn: the pool benched it, try the next one
+        if (isAuthError(e) && attempt.model.provider === 'groq' && this.deps.factory.groqPool.hasUsable()) {
+          rotatingKey = true
+          i--
+          continue
+        }
+        if (e instanceof MissingKeyError || isAuthError(e)) {
+          if (attempt.reason !== 'fallback' && this.deps.fallback) {
+            // the key is bad, not the network: skip any same-model retry and go straight to fallback
+            const fallbackIndex = attempts.findIndex((a) => a.reason === 'fallback')
+            if (fallbackIndex > i) i = fallbackIndex - 1
+            continue
+          }
           break
         }
         if (!isTransient(e)) break

@@ -65,4 +65,30 @@ describe('ModelFactory', () => {
       expect(model).toBeTruthy()
     }
   })
+
+  it('sends the workspace header on Anthropic requests when the key source supplies one', async () => {
+    const seen: Array<Headers> = []
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      seen.push(new Headers(init?.headers))
+      return new Response('{}', { status: 400 })
+    }) as typeof fetch
+    try {
+      const f = new ModelFactory({
+        keysFor: () => ['k1'],
+        headersFor: (p) => (p === 'anthropic' ? { 'anthropic-workspace-id': 'wrkspc_x' } : undefined)
+      })
+      const { model } = f.create(findModel('anthropic:claude-haiku-4-5')!)
+      try {
+        await (model as unknown as { doGenerate: (o: unknown) => PromiseLike<unknown> }).doGenerate({
+          prompt: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }]
+        })
+      } catch {
+        // the stub answers 400; only the outgoing headers matter here
+      }
+    } finally {
+      globalThis.fetch = realFetch
+    }
+    expect(seen[0]?.get('anthropic-workspace-id')).toBe('wrkspc_x')
+  })
 })

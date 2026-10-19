@@ -2,6 +2,8 @@ import type { Provider } from '@shared/types'
 
 export interface KeySource {
   keysFor(provider: Provider): string[]
+  // Extra request headers a provider needs (e.g. Anthropic keys not scoped to a workspace)
+  headersFor?(provider: Provider): Record<string, string> | undefined
 }
 
 // Round-robin over several Groq keys; a 429 benches a key for a minute, a 401 permanently.
@@ -23,6 +25,11 @@ export class GroqKeyPool {
       return key
     }
     return keys[this.idx % keys.length]
+  }
+
+  hasUsable(): boolean {
+    const now = Date.now()
+    return this.source.keysFor('groq').some((k) => (this.benched.get(k) ?? 0) <= now)
   }
 
   report(key: string, status: number): void {

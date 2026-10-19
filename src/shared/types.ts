@@ -342,8 +342,10 @@ export interface SttSettings {
 }
 
 export interface VoiceSettings {
-  engine: 'edge' | 'system'
+  engine: 'edge' | 'kokoro' | 'system'
   voice: string
+  /** Kokoro voice id (e.g. af_heart); used when Edge is unreachable or Kokoro is the engine. */
+  kokoroVoice: string
   rate: number
   pitch: number
 }

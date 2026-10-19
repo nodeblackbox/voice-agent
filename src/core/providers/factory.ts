@@ -25,7 +25,7 @@ export class ModelFactory {
     if (!key) throw new MissingKeyError(info.provider)
     switch (info.provider) {
       case 'anthropic':
-        return { model: createAnthropic({ apiKey: key })(info.model), key }
+        return { model: createAnthropic({ apiKey: key, headers: this.keys.headersFor?.('anthropic') })(info.model), key }
       case 'groq':
         return { model: createGroq({ apiKey: key })(info.model), key }
       case 'google':

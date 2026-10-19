@@ -18,7 +18,7 @@ export const DEFAULT_SETTINGS: Settings = {
   agentName: 'Ava',
   userName: 'the user',
   aboutUser: '',
-  voice: { engine: 'edge', voice: 'en-US-AvaNeural', rate: 1.0, pitch: 0 },
+  voice: { engine: 'edge', voice: 'en-US-AvaNeural', kokoroVoice: 'af_heart', rate: 1.0, pitch: 0 },
   audio: {},
   ...defaultTuning(),
   stt: { model: 'nemo-parakeet-tdt-0.6b-v2', device: 'hybrid', pythonPath: '' },
@@ -204,6 +204,12 @@ export class SettingsService implements KeySource {
       if (v) return this.split(v)
     }
     return []
+  }
+
+  headersFor(provider: Provider): Record<string, string> | undefined {
+    if (provider !== 'anthropic') return undefined
+    const ws = this.env.ANTHROPIC_WORKSPACE_ID?.trim()
+    return ws ? { 'anthropic-workspace-id': ws } : undefined
   }
 
   setKey(provider: Provider, raw: string): KeyStatus[] {

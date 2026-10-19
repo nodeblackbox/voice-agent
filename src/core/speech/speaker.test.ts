@@ -3,7 +3,7 @@ import type { AudioChunk } from '@shared/types'
 import { Speaker, type SpeakerDeps } from './speaker'
 import type { TtsEngine, TtsRequest } from './tts'
 
-const voice = { engine: 'edge' as const, voice: 'en-US-AvaNeural', rate: 1, pitch: 0 }
+const voice = { engine: 'edge' as const, voice: 'en-US-AvaNeural', kokoroVoice: 'af_heart', rate: 1, pitch: 0 }
 
 const engine = (impl: (req: TtsRequest, signal: AbortSignal) => Promise<Buffer | null>): TtsEngine => ({ name: 'edge', synth: impl })
 const okEngine = (delayFor: (text: string) => number = () => 0) =>
