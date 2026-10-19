@@ -22,18 +22,44 @@ beforeEach(() => {
   delete process.env.ANTHROPIC_API_KEY
   delete process.env.GROQ_KEYS
   delete process.env.GROQ_API_KEY
+  delete process.env.ANTHROPIC_WORKSPACE_ID
 })
 
 afterEach(() => rmSync(dir, { recursive: true, force: true }))
 
 describe('SettingsService', () => {
+  it('prefers the .env key over a stale inherited environment variable', () => {
+    process.env.ANTHROPIC_API_KEY = 'stale-system-key'
+    writeFileSync(env, 'ANTHROPIC_API_KEY=fresh-env-key')
+    expect(new SettingsService(dir, env).keysFor('anthropic')).toEqual(['fresh-env-key'])
+  })
+
+  it('converts a rate saved as a multiplier by older builds into the offset the slider uses', () => {
+    writeFileSync(join(dir, 'settings.json'), JSON.stringify({ voice: { engine: 'edge', voice: 'en-US-AvaNeural', rate: 1.2, pitch: 0 } }))
+    expect(new SettingsService(dir, env).get().voice.rate).toBeCloseTo(0.2)
+    writeFileSync(join(dir, 'settings.json'), JSON.stringify({ voice: { engine: 'edge', voice: 'en-US-AvaNeural', rate: 0.15, pitch: 0 } }))
+    expect(new SettingsService(dir, env).get().voice.rate).toBe(0.15)
+  })
+
+  it('reads GROQ_KEYS in the pool format [{ key, label, proxy }]', () => {
+    writeFileSync(env, `GROQ_KEYS=[{"key":"gsk_a","label":"a","proxy":"http://p"},{"key":"gsk_b"},"gsk_c"]`)
+    expect(new SettingsService(dir, env).keysFor('groq')).toEqual(['gsk_a', 'gsk_b', 'gsk_c'])
+  })
+
+  it('sends the Anthropic workspace id from .env as a header', () => {
+    writeFileSync(env, 'ANTHROPIC_WORKSPACE_ID=wrkspc_1')
+    const s = new SettingsService(dir, env)
+    expect(s.headersFor('anthropic')).toEqual({ 'anthropic-workspace-id': 'wrkspc_1' })
+    expect(s.headersFor('groq')).toBeUndefined()
+  })
+
   it('starts from defaults and deep-merges patches, persisting them', () => {
     const s = new SettingsService(dir, env)
     expect(s.get()).toEqual(DEFAULT_SETTINGS)
     const seen: string[] = []
     s.onChange((n) => seen.push(n.voice.voice))
     s.set({ voice: { ...s.get().voice, voice: 'en-GB-SoniaNeural' }, endpoint: { ...s.get().endpoint, duckGain: 0.1 } })
-    expect(s.get().voice).toMatchObject({ voice: 'en-GB-SoniaNeural', rate: 1 })
+    expect(s.get().voice).toMatchObject({ voice: 'en-GB-SoniaNeural', rate: 0 })
     expect(s.get().endpoint.duckGain).toBe(0.1)
     expect(s.get().endpoint.maxSilenceMs).toBe(DEFAULT_SETTINGS.endpoint.maxSilenceMs)
     expect(seen).toEqual(['en-GB-SoniaNeural'])

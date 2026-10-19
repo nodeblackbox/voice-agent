@@ -55,9 +55,10 @@ export interface KokoroBackend {
   synth(text: string, voice: string, speed: number, signal: AbortSignal): Promise<Buffer>
 }
 
-// `voice.rate` is Edge's prosody value: around 1 it is a multiplier, the Settings slider stores a
-// relative offset (-0.5..0.5). Map both onto Kokoro's speed multiplier.
-export const kokoroSpeed = (rate: number): number => Math.min(2, Math.max(0.5, rate >= 0.5 ? rate : 1 + rate))
+// `voice.rate` is a relative offset (-0.5..0.5, 0 = normal), as the Settings slider stores it.
+// Edge wants it as a signed percentage: a bare number in SSML is a multiplier, so 0.15 would be 15% speed.
+export const edgeRate = (rate: number): string => `${rate >= 0 ? '+' : ''}${Math.round(rate * 100)}%`
+export const kokoroSpeed = (rate: number): number => Math.min(2, Math.max(0.5, 1 + rate))
 
 // Last-resort local voice. Never throws for engine trouble: while Kokoro is loading or broken it
 // returns null, which the renderer speaks with the Windows voice.
@@ -187,7 +188,7 @@ export class EdgeTtsEngine implements TtsEngine {
 
         try {
           const result = w.tts.toStream(escapeXml(req.text), {
-            rate: req.rate,
+            rate: edgeRate(req.rate),
             pitch: `${req.pitch >= 0 ? '+' : ''}${Math.round(req.pitch)}Hz`
           })
           audioStream = result.audioStream
@@ -204,7 +205,9 @@ export class EdgeTtsEngine implements TtsEngine {
           clearTimeout(timer)
           signal.removeEventListener('abort', onAbort)
           if (err) {
-            healthy = false
+            // a barge-in abort leaves the socket fine: msedge-tts drops late frames for the destroyed
+            // request by id, so keep the warm socket instead of paying a new handshake next turn
+            if (!isAbort(err)) healthy = false
             audioStream?.destroy()
             reject(err)
             return
@@ -227,7 +230,7 @@ export class EdgeTtsEngine implements TtsEngine {
         audioStream.on('close', () => finish(null))
       })
     } catch (e) {
-      healthy = false
+      if (!isAbort(e)) healthy = false
       throw e
     } finally {
       this.release(w, healthy)

@@ -64,7 +64,8 @@ describe('readPage', () => {
     expect(out).toMatchObject({ url: 'https://example.com/doc' })
     expect('text' in out && out.text).toContain('Real content paragraph')
     expect('title' in out && out.title).toContain('Doc Title')
-  })
+    // the first readPage lazy-loads jsdom, which takes several seconds when the whole suite runs in parallel
+  }, 30_000)
 
   it('returns plain bodies as-is, truncated', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('a'.repeat(10_000), { headers: { 'content-type': 'text/plain' } })))

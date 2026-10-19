@@ -3,7 +3,7 @@ import type { AudioChunk } from '@shared/types'
 import { Speaker, type SpeakerDeps } from './speaker'
 import type { TtsEngine, TtsRequest } from './tts'
 
-const voice = { engine: 'edge' as const, voice: 'en-US-AvaNeural', kokoroVoice: 'af_heart', rate: 1, pitch: 0 }
+const voice = { engine: 'edge' as const, voice: 'en-US-AvaNeural', kokoroVoice: 'af_heart', rate: 0, pitch: 0 }
 
 const engine = (impl: (req: TtsRequest, signal: AbortSignal) => Promise<Buffer | null>): TtsEngine => ({ name: 'edge', synth: impl })
 const okEngine = (delayFor: (text: string) => number = () => 0) =>
@@ -60,7 +60,7 @@ describe('Speaker', () => {
     expect(chunks[0]?.last).toBe(true)
   })
 
-  it('retries a failed sentence once, then skips it', async () => {
+  it('retries a failed sentence once, then speaks it with the fallback instead of dropping it', async () => {
     let calls = 0
     const flaky = engine(async (req) => {
       calls++
@@ -72,7 +72,10 @@ describe('Speaker', () => {
     speaker.say('Good.')
     await speaker.finish()
     expect(calls).toBe(3)
-    expect(chunks.map((c) => text(c.mp3))).toEqual(['mp3:Good.'])
+    expect(chunks.filter((c) => c.text).map((c) => [c.text, text(c.mp3)])).toEqual([
+      ['Bad.', ''],
+      ['Good.', 'mp3:Good.']
+    ])
     expect(chunks.at(-1)?.last).toBe(true)
     expect(deps.onDegraded).not.toHaveBeenCalled()
   })
@@ -86,9 +89,25 @@ describe('Speaker', () => {
     await speaker.finish()
     expect(deps.onDegraded).toHaveBeenCalledTimes(1)
     const spoken = chunks.filter((c) => c.text)
-    expect(spoken.map((c) => c.text)).toEqual(['Three.', 'Four.'])
+    expect(spoken.map((c) => c.text)).toEqual(['One.', 'Two.', 'Three.', 'Four.'])
     for (const c of spoken) expect(c.mp3.byteLength).toBe(0)
     expect(chunks.at(-1)?.last).toBe(true)
+  })
+
+  it('degrades on the first sentence when the engine cannot be reached at all', async () => {
+    let calls = 0
+    const refused = engine(async () => {
+      calls++
+      throw new Error('Edge TTS WebSocket error: Unexpected server response: 403')
+    })
+    const { speaker, chunks, deps } = make({ engine: refused })
+    speaker.say('One.')
+    await new Promise((r) => setTimeout(r, 0))
+    speaker.say('Two.')
+    await speaker.finish()
+    expect(calls).toBe(1)
+    expect(deps.onDegraded).toHaveBeenCalledTimes(1)
+    expect(chunks.filter((c) => c.text).map((c) => c.text)).toEqual(['One.', 'Two.'])
   })
 
   it('marks fillers, counts them, and tracks first-sentence synthesis timings', async () => {

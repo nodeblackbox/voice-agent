@@ -7,7 +7,7 @@ export interface SpeakerDeps {
   engine: TtsEngine
   fallback: TtsEngine
   voice: VoiceSettings
-  /** Tries per sentence before it is skipped. */
+  /** Tries per sentence before it goes to the fallback engine. */
   attempts?: number
   /** Consecutive failed sentences before the rest of the turn uses the fallback engine. */
   degradeAfter?: number
@@ -19,6 +19,10 @@ export interface SpeakerDeps {
 
 type Kind = AudioChunk['kind']
 type Item = { seq: number; text: string; kind: Kind; result: Promise<Buffer | null | 'skip'> }
+
+// The engine can't be reached at all (handshake refused, DNS, connect timeout): retrying the next
+// sentences against it only adds silence, so the turn degrades on the first one.
+const UNREACHABLE = /unexpected server response|websocket error|connection (timed out|closed)|enotfound|econnrefused|eai_again/i
 
 /** Rough speaking rate used to estimate how long emitted audio keeps the speaker busy. */
 const CHARS_PER_SECOND = 15
@@ -114,29 +118,37 @@ export class Speaker {
       return out
     }
     const attempts = this.deps.attempts ?? DEFAULT_TUNING.speech.ttsAttempts
-    for (let attempt = 0; attempt < attempts; attempt++) {
+    let unreachable = false
+    let tried = 0
+    while (tried < attempts && !unreachable && !this.degraded) {
+      tried++
       try {
         const buf = await this.deps.engine.synth(req, this.signal)
         this.consecutiveFailures = 0
-        done('ok', attempt + 1, buf?.length)
+        done('ok', tried, buf?.length)
         return buf
       } catch (e) {
         if (isAbort(e) || this.signal.aborted) throw e
-        this.deps.log(`tts attempt ${attempt + 1} failed: ${(e as Error).message}`)
+        const msg = (e as Error).message
+        unreachable = UNREACHABLE.test(msg)
+        this.deps.log(`tts attempt ${tried} failed: ${msg}`)
       }
     }
     this.consecutiveFailures++
-    if (this.consecutiveFailures >= (this.deps.degradeAfter ?? DEFAULT_TUNING.speech.ttsDegradeAfter)) {
-      if (!this.degraded) {
-        this.degraded = true
-        this.deps.onDegraded()
-      }
-      const out = await this.deps.fallback.synth(req, this.signal)
-      done('fallback', attempts)
-      return out
+    if (!this.degraded && (unreachable || this.consecutiveFailures >= (this.deps.degradeAfter ?? DEFAULT_TUNING.speech.ttsDegradeAfter))) {
+      this.degraded = true
+      this.deps.onDegraded()
     }
-    done('skip', attempts)
-    return 'skip'
+    // a sentence Edge couldn't produce is still spoken, in the fallback voice, rather than dropped
+    try {
+      const out = await this.deps.fallback.synth(req, this.signal)
+      done('fallback', tried)
+      return out
+    } catch (e) {
+      if (isAbort(e) || this.signal.aborted) throw e
+      done('skip', tried)
+      return 'skip'
+    }
   }
 
   private async pump(): Promise<void> {

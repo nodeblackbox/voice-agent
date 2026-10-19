@@ -61,7 +61,7 @@ function harness(models: Record<string, MockLanguageModelV4>, over: Partial<Runn
     {
       engine: { name: 'edge', synth: async (req) => Buffer.from(req.text) },
       fallback: { name: 'system', synth: async () => null },
-      voice: { engine: 'edge', voice: 'v', kokoroVoice: 'af_heart', rate: 1, pitch: 0 },
+      voice: { engine: 'edge', voice: 'v', kokoroVoice: 'af_heart', rate: 0, pitch: 0 },
       emit: (c) => chunks.push(c),
       onDegraded: () => undefined,
       log: () => undefined

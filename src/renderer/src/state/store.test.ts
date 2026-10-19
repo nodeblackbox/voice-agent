@@ -15,7 +15,7 @@ const settings = {
   projectId: 'global',
   agentName: 'Ava',
   userName: 'me',
-  voice: { engine: 'edge', voice: 'en-US-AvaNeural', rate: 1, pitch: 0 },
+  voice: { engine: 'edge', voice: 'en-US-AvaNeural', rate: 0, pitch: 0 },
   audio: {},
   behaviour: { confirmBeforeSave: false, fillerBeforeTools: true, loadingSound: true, speakTypedReplies: true, listenOnLaunch: false },
   location: { mode: 'off', manual: '' },

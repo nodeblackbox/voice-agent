@@ -158,7 +158,7 @@ suspects → `bargeInThreshold`; slow speech end → audio → `firstMinWords` /
 $env:VA_WAV = 'utterance.wav'; $env:VA_WAV2 = 'bargein.wav'; $env:VA_TRACE = '1'; pnpm dev
 ```
 
-replays a 16 kHz mono wav through the ears, injects a second one while the agent speaks, and prints
+starts the ears (no need for listen-on-launch), replays a 16 kHz mono wav through them, injects a second one while the agent speaks, and prints
 the trace path on quit. Expect, in order: `ear.speech_end` with `checks`, `turn.start`,
 `turn.first_audio` with `speechEndToAudioMs`, `ear.bargein stage=cut`, `turn.cancel` with
 `spokenText`/`unspokenText`, `turn.spoken_split`, a second `turn.start` whose model history carries

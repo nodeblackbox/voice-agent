@@ -18,7 +18,7 @@ export const DEFAULT_SETTINGS: Settings = {
   agentName: 'Ava',
   userName: 'the user',
   aboutUser: '',
-  voice: { engine: 'edge', voice: 'en-US-AvaNeural', kokoroVoice: 'af_heart', rate: 1.0, pitch: 0 },
+  voice: { engine: 'edge', voice: 'en-US-AvaNeural', kokoroVoice: 'af_heart', rate: 0, pitch: 0 },
   audio: {},
   ...defaultTuning(),
   stt: { model: 'nemo-parakeet-tdt-0.6b-v2', device: 'hybrid', pythonPath: '' },
@@ -85,12 +85,15 @@ export class SettingsService implements KeySource {
     this.keysPath = join(userData, 'keys.json')
     this.stylesPath = join(userData, 'styles.json')
     this.skillsPath = join(userData, 'skills.json')
-    this.env = { ...parseDotEnv(dotEnvPath), ...process.env } as Record<string, string>
+    // the project's .env wins over inherited shell/system variables, which tend to hold stale keys
+    this.env = { ...process.env, ...parseDotEnv(dotEnvPath) } as Record<string, string>
     const stored = this.readJson<Partial<Settings>>(this.settingsPath, {})
     // tuning groups: unknown keys dropped, values clamped, superseded defaults replaced by current ones
     const migrated: TuningMigration[] = []
     const tuning = sanitizeTuning(stored, (m) => migrated.push(m))
     this.settings = deepMerge(DEFAULT_SETTINGS, { ...stored, ...tuning })
+    // older builds stored the rate as a multiplier (1.0 = normal); it is now an offset, and the slider tops out at +0.5
+    if (this.settings.voice.rate > 0.5) this.settings.voice = { ...this.settings.voice, rate: Math.min(0.5, this.settings.voice.rate - 1) }
     this.migrations = migrated
     this.customStyles = this.readJson<PromptStyle[]>(this.stylesPath, [])
     this.storedSkills = this.readJson<Skill[]>(this.skillsPath, [])
@@ -185,7 +188,10 @@ export class SettingsService implements KeySource {
     const trimmed = raw.trim()
     if (trimmed.startsWith('[')) {
       try {
-        return (JSON.parse(trimmed) as string[]).map((s) => s.trim()).filter(Boolean)
+        // plain strings, or the pool format [{ key, label?, proxy? }] (proxies aren't used here)
+        return (JSON.parse(trimmed) as Array<string | { key?: string }>)
+          .map((e) => (typeof e === 'string' ? e : (e?.key ?? '')).trim())
+          .filter(Boolean)
       } catch {
         // fall through to comma splitting
       }

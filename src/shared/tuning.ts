@@ -121,8 +121,8 @@ export const TUNING = {
     fillerMinGapMs: n(4000, 0, 20000, 500, 'core', 'Filler min gap', 'Skip the lead-in filler for a tool call if another filler was spoken more recently than this.', { unit: 'ms' }),
     ttsPoolSize: n(3, 1, 6, 1, 'core', 'TTS pool size', 'Edge TTS sockets kept open; also the number of sentences synthesized ahead of playback.', { unit: 'sockets', restart: true }),
     ttsTimeoutMs: n(12000, 3000, 30000, 500, 'core', 'TTS timeout', 'Give up on one sentence of Edge TTS after this long.', { unit: 'ms' }),
-    ttsAttempts: n(2, 1, 4, 1, 'core', 'TTS attempts', 'Tries per sentence before it is skipped.', { unit: 'tries' }),
-    ttsDegradeAfter: n(3, 1, 10, 1, 'core', 'TTS degrade after', 'Consecutive failed sentences before the rest of the turn uses the system voice.', { unit: 'failures' })
+    ttsAttempts: n(2, 1, 4, 1, 'core', 'TTS attempts', 'Tries per sentence before it is spoken with the fallback voice.', { unit: 'tries' }),
+    ttsDegradeAfter: n(3, 1, 10, 1, 'core', 'TTS degrade after', 'Consecutive failed sentences before the rest of the turn uses the fallback voice (immediately when Edge is unreachable).', { unit: 'failures' })
   },
   playback: {
     duckRampMs: n(60, 10, 500, 10, 'renderer', 'Duck ramp', 'Gain ramp time when ducking or restoring playback volume.', { unit: 'ms' }),

@@ -256,7 +256,8 @@ app.whenReady().then(async () => {
 
   // The ears hold Parakeet on the GPU and several GB of RAM, so they are only started when the
   // microphone is actually wanted. Typed chat never needs them.
-  if (settings.get().behaviour.listenOnLaunch) sidecar.start()
+  // the dev replay harnesses wait for the ears, so they start them too
+  if (settings.get().behaviour.listenOnLaunch || (isDev && (process.env.VA_WAV || process.env.VA_MIC))) sidecar.start()
   void mcp.reload()
   if (isDev && process.env.VA_SAY) setTimeout(() => void agent.send(process.env.VA_SAY!), 4000)
   if (isDev && process.env.VA_VIEW) {
