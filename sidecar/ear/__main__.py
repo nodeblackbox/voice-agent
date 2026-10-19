@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -77,9 +78,15 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(stream=sys.stderr, level=args.log_level.upper(),
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s", datefmt="%H:%M:%S")
     try:
-        return asyncio.run(run(args))
+        code = asyncio.run(run(args))
     except KeyboardInterrupt:
         return 0
+    if code:
+        # a decode thread stuck in native code would keep a normal interpreter shutdown waiting
+        logging.shutdown()
+        sys.stderr.flush()
+        os._exit(code)
+    return code
 
 
 if __name__ == "__main__":

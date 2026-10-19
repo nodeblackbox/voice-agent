@@ -42,7 +42,7 @@ not exit.
 `maxSilenceLowMs` (3000), `bargeInThreshold` (0.75), `bargeInInstant` (true), `bargeInChunks` (10),
 `duckChunks` (3), `duckGain` (0.25), `bargeInDecay` (1), `bargeInReleaseChunks` (6), `partialEveryMs` (600),
 `silencePartialMs` (100), `prerollMs` (1000), `maxUtteranceMs` (120000), `segmentEveryMs` (30000),
-`fillerWords` (see below), `fillerHoldsHighTier` (true), `levelEveryFrames` (3), `asrFailureLimit` (3).
+`fillerWords` (see below), `fillerHoldsHighTier` (true), `levelEveryFrames` (3), `asrFailureLimit` (3), `asrHangMs` (15000).
 
 - The silence cap adapts to Smart Turn: while its last score is below `turnLowThreshold` (the user
   is clearly mid-thought) the turn stays open for `maxSilenceLowMs`; otherwise `maxSilenceMs`.
@@ -57,6 +57,9 @@ not exit.
 - After `asrFailureLimit` consecutive decode failures (typically a CUDA/cuBLAS allocation error when
   another process took the VRAM) the sidecar reloads the ASR model once; if decoding still fails it
   sends `error{fatal:true, code:'asr_broken'}` and exits with code **4** so the app restarts it.
+- A decode still running after `asrHangMs` plus half its audio length (a CUDA run starved by other apps
+  on the GPU never returns, and every later final would queue behind it) sends
+  `error{fatal:true, code:'asr_hung'}` and exits with code **4** the same way.
 
 The app derives every value here from `src/shared/tuning.ts`; see `docs/TUNING.md`.
 
@@ -74,7 +77,7 @@ The app derives every value here from `src/shared/tuning.ts`; see `docs/TUNING.m
 | `final` | `text: string`, `durationMs: number`, `asrMs: number`, `asrRtf`, `queuedMs`, `turnP: number \| null`, `reason`, `afterCut`, `segments: number` | Final transcript for the tail of the utterance (`segments` earlier parts were sent as `segment`). Empty `text` is possible (the client decides whether to drop it). |
 | `bargein` | `stage: 'duck' \| 'cut' \| 'release'` | Only while `agent_speaking`/`agent_thinking` is on. With `bargeInInstant` (the default) only `cut` is ever sent: credit reached `duckChunks` (~100 ms), the sidecar has already opened a new utterance (with preroll) and the client must cancel the current turn. In staged mode (`bargeInInstant: false`): `duck`: credit reached `duckChunks` (client lowers playback gain to `duckGain`); `release`: it was a short backchannel, restore gain; `cut`: credit reached `bargeInChunks`. A `speech_start` follows immediately after `cut`. |
 | `stats` | `turns`, `turnChecks`, `turnCostP50Ms`, `heldOnFiller`, `backchannels`, `cuts`, `cutsEmptyFinal`, `asrFailures`, `asrReloads`, `gpuMiB?` (from `nvidia-smi` when available) | After every final, and every 30 s while barge-in activity happened. |
-| `error` | `message`, `fatal: bool`, `code?` (`asr_broken`) | Non-fatal errors keep the connection open. |
+| `error` | `message`, `fatal: bool`, `code?` (`asr_broken`, `asr_hung`) | Non-fatal errors keep the connection open. |
 | `pong` | – | |
 
 ## Turn flow (normal)

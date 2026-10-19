@@ -63,6 +63,9 @@ class EndpointConfig:
     level_every_frames: int = 3
     # consecutive decode failures before the ASR model is reloaded; failing again after that is fatal
     asr_failure_limit: int = 3
+    # a decode still running after this long (plus half the audio's length) is treated as hung, e.g. a
+    # CUDA run starved by other apps on the GPU: it can't be cancelled, so the process exits for a restart
+    asr_hang_ms: int = 15000
 
     def filler_set(self) -> frozenset[str]:
         return frozenset(w.strip().lower() for w in self.filler_words.split(",") if w.strip())

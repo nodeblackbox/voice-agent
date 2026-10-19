@@ -425,3 +425,36 @@ def test_a_persistent_frame_fault_is_rate_limited(make_pipeline, events):
     errors = [e for e in events if e["type"] == "error"]
     assert len(errors) == 3
     assert all("bad frame" in e["message"] for e in errors)
+
+
+def test_a_decode_that_never_returns_is_fatal_so_the_app_restarts_the_ears(make_pipeline, events):
+    # a CUDA run starved by other apps on the GPU blocks recognize() forever; nothing throws
+    p = make_pipeline()
+    fatal: list[int] = []
+    p.on_fatal = fatal.append
+    clock = p._clock
+    hung: dict[str, bool] = {}
+
+    class Stuck(FakeAsr):
+        def recognize(self, audio):
+            hung["checked_early"] = p.check_hang()
+            clock.t += 15.0 + 10.0 * 0.5 - 0.1  # just under the budget for 10 s of audio
+            hung["checked_under"] = p.check_hang()
+            clock.t += 0.2
+            hung["checked_over"] = p.check_hang()
+            return ""
+
+    p.asr = Stuck()
+    p._recognize(np.zeros(SR * 10, dtype=np.float32))
+    assert hung == {"checked_early": False, "checked_under": False, "checked_over": True}
+    assert fatal == [4] and p.fatal_code == 4
+    err = next(e for e in events if e["type"] == "error" and e.get("fatal"))
+    assert err["code"] == "asr_hung"
+    assert p.check_hang() is False  # reported once
+    assert p._decoding is None
+
+
+def test_no_hang_is_reported_between_decodes(make_pipeline):
+    p = make_pipeline()
+    p._clock.t += 3600
+    assert p.check_hang() is False and p.fatal_code is None

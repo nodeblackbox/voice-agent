@@ -163,6 +163,7 @@ app.whenReady().then(async () => {
           break
         case 'error':
           if (!evt.fatal) logAt('warn', 'ear', `error: ${evt.message}`)
+          else if (evt.code === 'asr_hung') emit({ type: 'toast', toast: { id: crypto.randomUUID(), kind: 'warn', text: 'Speech recognition froze (the graphics card is probably busy with other apps) and is restarting. Speak again in a few seconds.' } })
           else if (evt.code === 'asr_broken') emit({ type: 'toast', toast: { id: crypto.randomUUID(), kind: 'warn', text: 'The ears hit a GPU error and are restarting. Check what else is using the graphics card if it keeps happening.' } })
           break
         default:
@@ -189,7 +190,12 @@ app.whenReady().then(async () => {
     skills: () => settings.skills(),
     mcp,
     search: { baseUrl: () => searxng.baseUrl(), ensure: () => searxng.ensure(), configured: () => searxng.configured() },
-    ears: { agentSpeaking: (on) => sidecar.agentSpeaking(on), agentThinking: (on) => sidecar.agentThinking(on) },
+    ears: {
+      agentSpeaking: (on) => sidecar.agentSpeaking(on),
+      agentThinking: (on) => sidecar.agentThinking(on),
+      // only when connected: if the sidecar is already restarting itself (asr_hung), leave it be
+      restartStuck: () => sidecar.ready && sidecar.restart()
+    },
     kokoro,
     emit,
     emitAudio: (chunk: AudioChunk) => send(IPC.audioChunk, chunk),

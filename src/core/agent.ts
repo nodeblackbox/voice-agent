@@ -47,6 +47,8 @@ import type { Trace } from './trace'
 export interface EarsControl {
   agentSpeaking(on: boolean): void
   agentThinking(on: boolean): void
+  /** Restart the ears if they are up but not producing transcripts. */
+  restartStuck?(): void
 }
 
 export interface AgentDeps {
@@ -131,6 +133,8 @@ const clip = (s: string, max: number): string => (s.length > max ? `${s.slice(0,
 
 /** A cut with an empty transcript resumes the reply at most this often per message (guards a self-cut loop). */
 const MAX_EMPTY_RESUMES = 2
+/** A transcript normally lands well under 2 s after speech ends; past this the ears are stuck. */
+export const FINAL_OVERDUE_MS = 25_000
 /** How long turns stay on the fallback voice after Edge failed before Edge is tried again. */
 const EDGE_RETRY_AFTER_MS = 60_000
 
@@ -159,6 +163,9 @@ export class Agent {
   private mergePending: { userMsgId: string; text: string; parts: number; since: number } | null = null
   /** Segments of a long utterance that is still open. */
   private segmentBuffer: { userMsgId: string; texts: string[] } | null = null
+  /** speech_end events still waiting for their final transcript, and the timer guarding them. */
+  private awaitingFinals = 0
+  private finalTimer: ReturnType<typeof setTimeout> | null = null
   selfCutSuspects = 0
   /** Streaming message updates are persisted and pushed to the UI at `brain.uiFlushMs`, not per token. */
   private readonly flusher = new Coalescer<ChatMessage>(
@@ -221,6 +228,7 @@ export class Agent {
 
   /** Called on quit: cancel what is running and write the session summary. */
   shutdown(): void {
+    this.clearFinalWatch()
     this.cancel()
     this.closeSession()
   }
@@ -299,11 +307,44 @@ export class Agent {
     this.lastSpeechEnd = info ? { ...info, at: Date.now() } : { reason: 'done', silenceMs: 0, turnP: null, at: Date.now() }
     this.sm.speechEnd()
     this.deps.emit({ type: 'partial', text: '' })
+    this.awaitingFinals++
+    this.armFinalWatch()
+  }
+
+  private armFinalWatch(): void {
+    if (this.finalTimer) clearTimeout(this.finalTimer)
+    this.finalTimer = setTimeout(() => this.finalOverdue(), FINAL_OVERDUE_MS)
+    this.finalTimer.unref?.()
+  }
+
+  private clearFinalWatch(): void {
+    if (this.finalTimer) clearTimeout(this.finalTimer)
+    this.finalTimer = null
+    this.awaitingFinals = 0
+  }
+
+  // The ears said the user stopped talking but no transcript followed (a decode frozen on a busy
+  // GPU, a dead sidecar). Without this the agent sits on "thinking" until the app is restarted.
+  private finalOverdue(): void {
+    const waiting = this.awaitingFinals
+    this.clearFinalWatch()
+    this.tr('turn.final_overdue', { waitingMs: FINAL_OVERDUE_MS, finals: waiting, state: this.sm.state })
+    this.deps.log(`no transcript ${FINAL_OVERDUE_MS / 1000}s after speech ended (${waiting} pending); restarting the ears`)
+    const segments = this.segmentBuffer
+    this.segmentBuffer = null
+    this.mergePending = null
+    const partial = segments && this.messages.find((x) => x.id === segments.userMsgId)
+    if (partial) this.upsert({ ...partial, streaming: false })
+    if (this.sm.state === 'thinking' && !this.turn) this.sm.done()
+    this.deps.ears.restartStuck?.()
+    this.toast('warn', "Speech recognition stopped responding, so I didn't catch that. Restarting the ears; type, or speak again in a few seconds.")
   }
 
   onFinal(text: string, asrMs: number, meta: { afterCut?: boolean; durationMs?: number; queuedMs?: number; segments?: number } = {}): void {
     const tail = text.trim()
     this.deps.emit({ type: 'partial', text: '' })
+    if (this.awaitingFinals > 0 && --this.awaitingFinals > 0) this.armFinalWatch()
+    else this.clearFinalWatch()
     const tooShort = tail.length < this.deps.settings().brain.minUtteranceChars || /^[\s.,!?]*$/.test(tail)
     if (meta.afterCut) {
       // an interruption whose transcript is empty or echoes what the agent was saying is probably

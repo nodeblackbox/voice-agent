@@ -117,10 +117,13 @@ class Pipeline:
         self._probe_gpu_enabled = probe_gpu
         self._gpu_probe_t = -1e9
         self._gpu_probe_busy = threading.Event()
+        # (clock when the running decode started, audio seconds) while recognize() is in flight
+        self._decoding: tuple[float, float] | None = None
 
         if start_threads:
             threading.Thread(target=self._frame_loop, name="ear-frames", daemon=True).start()
             threading.Thread(target=self._decode_loop, name="ear-decode", daemon=True).start()
+            threading.Thread(target=self._hang_watchdog, name="ear-watchdog", daemon=True).start()
 
     # ------------------------------------------------------------------ lifecycle
     def load(self) -> None:
@@ -272,6 +275,39 @@ class Pipeline:
         self.emit({"type": "error", "message": message, "fatal": True, "code": "asr_broken"})
         if self.on_fatal:
             self.on_fatal(4)
+
+    def _recognize(self, audio: np.ndarray) -> str:
+        """asr.recognize under the lock, visible to the hang watchdog while it runs."""
+        assert self.asr is not None
+        self._decoding = (self._clock(), len(audio) / SR)
+        try:
+            return self.asr.recognize(audio)
+        finally:
+            self._decoding = None
+
+    def check_hang(self) -> bool:
+        """True (and fatal) when the running decode has overrun its budget. A stuck onnxruntime run
+        can't be interrupted, and every later final would queue behind it while the app waits."""
+        running = self._decoding
+        if running is None or self.fatal_code is not None:
+            return False
+        started, audio_s = running
+        elapsed_ms = (self._clock() - started) * 1e3
+        limit_ms = self.cfg.asr_hang_ms + audio_s * 500
+        if elapsed_ms < limit_ms:
+            return False
+        self.fatal_code = 4
+        message = f"speech recognition froze: a {audio_s:.1f} s decode has run for {elapsed_ms / 1e3:.0f} s"
+        log.error("%s (GPU busy or stalled?); exiting so the app restarts the ears", message)
+        self.emit({"type": "error", "message": message, "fatal": True, "code": "asr_hung"})
+        if self.on_fatal:
+            self.on_fatal(4)
+        return True
+
+    def _hang_watchdog(self) -> None:
+        while self.fatal_code is None:
+            time.sleep(1.0)
+            self.check_hang()
 
     def _probe_gpu(self) -> None:
         """`nvidia-smi` in a helper thread, at most every 30 s; the value rides on `stats`."""
@@ -469,7 +505,7 @@ class Pipeline:
             if not self._asr_lock.acquire(timeout=0.05):
                 return
             try:
-                text = self.asr.recognize(audio[-SR * 10:])
+                text = self._recognize(audio[-SR * 10:])
             finally:
                 self._asr_lock.release()
             self._asr_ok()
@@ -510,7 +546,7 @@ class Pipeline:
         if len(audio):
             try:
                 with self._asr_lock:
-                    text = self.asr.recognize(audio)
+                    text = self._recognize(audio)
                 self._asr_ok()
             except Exception as exc:  # noqa: BLE001
                 self._fault(f"{item['kind']} decode failed", exc)
